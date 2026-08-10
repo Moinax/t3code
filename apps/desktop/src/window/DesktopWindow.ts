@@ -14,11 +14,13 @@ import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
+import type { DeepLinkTarget } from "../app/DesktopDeepLink.ts";
 import { getDesktopUrl } from "../electron/ElectronProtocol.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
+  DEEP_LINK_CHANNEL,
   MENU_ACTION_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
   SNAP_SHOT_EVENT_CHANNEL,
@@ -112,6 +114,11 @@ export class DesktopWindow extends Context.Service<
     readonly dispatchSnapShotEvent: (
       event: DesktopSnapShotEvent,
     ) => Effect.Effect<void, DesktopWindowError>;
+    // Routes an already-parsed deep link to the renderer. Unlike a menu action,
+    // this can arrive before the backend is ready (the link is what launched the
+    // app), so an undeliverable target is held and replayed by
+    // handleBackendReady instead of being dropped.
+    readonly dispatchDeepLink: (target: DeepLinkTarget) => Effect.Effect<void, DesktopWindowError>;
     // Zooms the main window's own webContents. The Electron `zoomIn`/`zoomOut`
     // menu roles act on whichever webContents has keyboard focus, so with an
     // embedded preview WebContentsView (or DevTools) focused they zoom the
@@ -308,6 +315,13 @@ export const make = Effect.gen(function* () {
   // createMainIfBackendReady, which gates the post-readiness window
   // open in development and the macOS "activate without windows" path.
   const backendReadyRef = yield* Ref.make(false);
+  // A deep link can be what launches the app, so it may arrive long before the
+  // backend is ready and before any window exists. Holding the most recent
+  // target here (rather than dropping it, as menu actions do) is what makes
+  // "click a link while the app is closed" land on the right thread; it is
+  // replayed once by handleBackendReady. Only the newest target is kept — if
+  // several links arrive during startup, the last one is what the user meant.
+  const pendingDeepLinkRef = yield* Ref.make<Option.Option<DeepLinkTarget>>(Option.none());
   // The transient "Connecting to WSL" splash window, tracked separately so it
   // is never mistaken for the real main window.
   const splashWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
@@ -916,6 +930,23 @@ export const make = Effect.gen(function* () {
     yield* dispatch;
   });
 
+  // Shared by dispatchDeepLink and by the replay in handleBackendReady, so a
+  // link that launched the app takes exactly the same delivery path as one that
+  // arrived while the app was already running.
+  const deliverDeepLink = Effect.fn("desktop.window.deliverDeepLink")(function* (
+    target: DeepLinkTarget,
+  ) {
+    yield* Effect.annotateCurrentSpan({ environmentId: target.environmentId });
+    const existingWindow = yield* focusedMainWindow;
+    if (Option.isNone(existingWindow) && !(yield* Ref.get(backendReadyRef))) {
+      yield* Ref.set(pendingDeepLinkRef, Option.some(target));
+      yield* logWindowInfo("deep link held until backend is ready", { kind: target.kind });
+      return;
+    }
+
+    yield* dispatchRendererEvent(DEEP_LINK_CHANNEL, target);
+  });
+
   return DesktopWindow.of({
     createMain,
     ensureMain,
@@ -953,6 +984,13 @@ export const make = Effect.gen(function* () {
       yield* Ref.set(backendReadyRef, true);
       yield* logWindowInfo("backend ready", { source: "http", url: httpBaseUrl.href });
       yield* createMainIfBackendReady;
+
+      // Replay a link that arrived before the backend came up. Taken (not read)
+      // so a later backend restart cannot deliver the same link a second time.
+      const pending = yield* Ref.getAndSet(pendingDeepLinkRef, Option.none());
+      if (Option.isSome(pending)) {
+        yield* deliverDeepLink(pending.value);
+      }
     }),
     handleBackendNotReady: Ref.set(backendReadyRef, false).pipe(
       Effect.withSpan("desktop.window.handleBackendNotReady"),
@@ -973,6 +1011,7 @@ export const make = Effect.gen(function* () {
         reveal: event.type === "started",
       });
     }),
+    dispatchDeepLink: deliverDeepLink,
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });
       const window = yield* focusedMainWindow;

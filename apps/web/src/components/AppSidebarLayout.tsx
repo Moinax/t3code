@@ -218,6 +218,27 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     };
   }, [navigate, pathname]);
 
+  useEffect(() => {
+    const onDeepLink = window.desktopBridge?.onDeepLink;
+    if (typeof onDeepLink !== "function") {
+      return;
+    }
+
+    const unsubscribe = onDeepLink((target) => {
+      if (target.kind !== "thread") {
+        return;
+      }
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: target.environmentId, threadId: target.threadId },
+      });
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [navigate]);
+
   return (
     <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
       <SidebarProvider
