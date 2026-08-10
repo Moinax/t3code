@@ -14,6 +14,22 @@ exposeClerkBridge({ passkeys: true });
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Electron exposes the client platform in its sandboxed preload process.
 const clientPlatform = process.platform;
 
+// The main process sends a deep link as soon as the window finishes loading,
+// but the renderer subscribes only after the auth gate resolves — well after
+// `did-finish-load` on a cold start. IPC messages are not buffered, so the
+// channel listener must exist from preload time: queue anything that arrives
+// before the first subscriber, flush on subscribe. Without this, the link
+// that *launched* the app is silently dropped.
+const deepLinkSubscribers = new Set<(target: unknown) => void>();
+const pendingDeepLinks: unknown[] = [];
+ipcRenderer.on(IpcChannels.DEEP_LINK_CHANNEL, (_event, target: unknown) => {
+  if (deepLinkSubscribers.size === 0) {
+    pendingDeepLinks.push(target);
+    return;
+  }
+  for (const subscriber of deepLinkSubscribers) subscriber(target);
+});
+
 function unwrapEnsureSshEnvironmentResult(result: unknown) {
   if (
     typeof result === "object" &&
@@ -149,6 +165,32 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.on(IpcChannels.QUIT_SHORTCUT_CHANNEL, wrappedListener);
     return () => {
       ipcRenderer.removeListener(IpcChannels.QUIT_SHORTCUT_CHANNEL, wrappedListener);
+    };
+  },
+  onDeepLink: (listener) => {
+    const wrappedListener = (target: unknown) => {
+      // The main process already validated the URL, but this is the trust
+      // boundary into the renderer — re-check the shape rather than casting.
+      // Queued payloads pass through the same check at flush time.
+      if (typeof target !== "object" || target === null) return;
+      const candidate = target as Record<string, unknown>;
+      if (candidate.kind !== "thread") return;
+      if (typeof candidate.environmentId !== "string" || typeof candidate.threadId !== "string") {
+        return;
+      }
+      listener({
+        kind: "thread",
+        environmentId: candidate.environmentId,
+        threadId: candidate.threadId,
+      });
+    };
+
+    deepLinkSubscribers.add(wrappedListener);
+    while (pendingDeepLinks.length > 0) {
+      wrappedListener(pendingDeepLinks.shift());
+    }
+    return () => {
+      deepLinkSubscribers.delete(wrappedListener);
     };
   },
   getWindowFullscreenState: () =>
