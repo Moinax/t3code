@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { findDeepLinkInArgv, parseDeepLink } from "./DesktopDeepLink.ts";
+import { deepLinkSocketPath } from "./DesktopDeepLinkRouter.ts";
 
 const SCHEMES = ["t3code", "t3code-dev"] as const;
 
@@ -97,14 +98,54 @@ describe("findDeepLinkInArgv", () => {
   });
 
   it("returns the first match when several links are present", () => {
-    expect(
-      findDeepLinkInArgv(["t3code://threads/a/b", "t3code://threads/c/d"], SCHEMES),
-    ).toBe("t3code://threads/a/b");
+    expect(findDeepLinkInArgv(["t3code://threads/a/b", "t3code://threads/c/d"], SCHEMES)).toBe(
+      "t3code://threads/a/b",
+    );
   });
 
   it("returns null when no argument uses a registered scheme", () => {
     expect(findDeepLinkInArgv(["/path/to/T3 Code", "--flag"], SCHEMES)).toBeNull();
     expect(findDeepLinkInArgv(["https://example.com"], SCHEMES)).toBeNull();
     expect(findDeepLinkInArgv([], SCHEMES)).toBeNull();
+  });
+});
+
+describe("deepLinkSocketPath", () => {
+  it("puts the socket in the per-user runtime dir, named per channel", () => {
+    expect(
+      deepLinkSocketPath({
+        isDevelopment: false,
+        runtimeDir: "/run/user/1000",
+        tmpDir: "/tmp",
+        uid: 1000,
+      }),
+    ).toBe("/run/user/1000/t3code-deeplink.sock");
+
+    // A dev build must not answer for the installed one, or a link meant for
+    // either lands in whichever happened to bind first.
+    expect(
+      deepLinkSocketPath({
+        isDevelopment: true,
+        runtimeDir: "/run/user/1000",
+        tmpDir: "/tmp",
+        uid: 1000,
+      }),
+    ).toBe("/run/user/1000/t3code-dev-deeplink.sock");
+  });
+
+  it("falls back to a uid-scoped name in the temp dir", () => {
+    // /tmp is shared, so without the uid two users racing for one path would
+    // mean one of them cannot bind at all.
+    expect(
+      deepLinkSocketPath({
+        isDevelopment: false,
+        runtimeDir: undefined,
+        tmpDir: "/tmp",
+        uid: 1000,
+      }),
+    ).toBe("/tmp/1000-t3code-deeplink.sock");
+    expect(
+      deepLinkSocketPath({ isDevelopment: false, runtimeDir: "  ", tmpDir: "/tmp", uid: 1001 }),
+    ).toBe("/tmp/1001-t3code-deeplink.sock");
   });
 });
