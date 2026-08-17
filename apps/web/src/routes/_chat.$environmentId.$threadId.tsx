@@ -4,7 +4,11 @@ import { useEffect } from "react";
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
-import { resolveThreadRouteRef, resolveThreadRouteRenderState } from "../threadRoutes";
+import {
+  resolveThreadRouteExit,
+  resolveThreadRouteRef,
+  resolveThreadRouteRenderState,
+} from "../threadRoutes";
 import { resolveThreadSyncPhase } from "../threadSync";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { SidebarInset } from "~/components/ui/sidebar";
@@ -16,6 +20,14 @@ import {
 } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
+
+/**
+ * How long a thread id this client has never heard of is given to arrive on the
+ * live stream before the route treats it as gone. Generous on purpose: the cost
+ * of waiting is a blank pane on a link that was bad anyway, while the cost of
+ * leaving early is landing the user in another project's draft.
+ */
+const UNSYNCED_THREAD_GRACE_MS = 2_500;
 
 function ChatThreadRouteView() {
   const navigate = useNavigate();
@@ -57,23 +69,40 @@ function ChatThreadRouteView() {
   });
   const serverThreadStarted = threadHasStarted(serverThreadDetail);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
+  const exit = resolveThreadRouteExit({
+    renderState,
+    environmentHasAnyThreads,
+    serverThreadDeleted: serverThreadStatus === "deleted",
+  });
 
   useEffect(() => {
-    if (!threadRef || !bootstrapComplete) {
+    if (!threadRef || renderState !== "missing") {
       return;
     }
 
-    // Navigation already resolved onto this path, so a drop aimed here
-    // passed its landing check; once the thread reads as missing it can
-    // never be attached, release it even when there is nowhere to redirect.
-    if (renderState === "missing") {
+    const clearPendingFileDrops = () => {
       const { clearPendingFileDropsForThread } = useSidebarPendingFileDropStore.getState();
       clearPendingFileDropsForThread(threadRef);
-      if (environmentHasAnyThreads) {
-        void navigate({ to: "/", replace: true });
-      }
+    };
+
+    if (exit === "stay") {
+      clearPendingFileDrops();
+      return;
     }
-  }, [bootstrapComplete, environmentHasAnyThreads, navigate, renderState, threadRef]);
+    if (exit === "immediate") {
+      clearPendingFileDrops();
+      void navigate({ to: "/", replace: true });
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      clearPendingFileDrops();
+      void navigate({ to: "/", replace: true });
+    }, UNSYNCED_THREAD_GRACE_MS);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [exit, navigate, renderState, threadRef]);
 
   useEffect(() => {
     if (!threadRef || !serverThreadStarted || !draftThread) {

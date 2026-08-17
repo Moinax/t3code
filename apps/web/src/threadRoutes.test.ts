@@ -7,6 +7,7 @@ import {
   buildDraftThreadRouteParams,
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
+  resolveThreadRouteExit,
   resolveThreadRouteRenderState,
   resolveThreadRouteRef,
   resolveThreadRouteTarget,
@@ -158,5 +159,42 @@ describe("threadRoutes", () => {
         draftThreadExists: false,
       }),
     ).toBe("missing");
+  });
+
+  it("waits for the sync before leaving a thread it has never heard of", () => {
+    expect(
+      resolveThreadRouteExit({
+        renderState: "missing",
+        environmentHasAnyThreads: true,
+        serverThreadDeleted: false,
+      }),
+    ).toBe("after-sync-grace");
+  });
+
+  it("leaves a deleted thread at once", () => {
+    expect(
+      resolveThreadRouteExit({
+        renderState: "missing",
+        environmentHasAnyThreads: true,
+        serverThreadDeleted: true,
+      }),
+    ).toBe("immediate");
+  });
+
+  it("stays on a thread that renders, and on the last thread of an environment", () => {
+    expect(
+      resolveThreadRouteExit({
+        renderState: "loading",
+        environmentHasAnyThreads: true,
+        serverThreadDeleted: false,
+      }),
+    ).toBe("stay");
+    expect(
+      resolveThreadRouteExit({
+        renderState: "missing",
+        environmentHasAnyThreads: false,
+        serverThreadDeleted: true,
+      }),
+    ).toBe("stay");
   });
 });
