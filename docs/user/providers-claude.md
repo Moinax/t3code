@@ -59,9 +59,14 @@ timestamp shows when the displayed wait started.
 
 ## Skills
 
-Claude skills come from the config directory's `skills` folder and the project's
+Claude skills come from installed plugins, the config directory's `skills` folder, and the project's
 `.claude/skills` folder. If both define the same name, the config-directory copy
 wins. Skills disabled in Claude's settings do not appear in the composer.
+
+Plugin skills carry the plugin's name, so a `tdd` skill from the `mattpocock-skills` plugin appears
+as `mattpocock-skills:tdd` — the same name Claude Code itself uses. A plugin you have switched off,
+or one installed for a different project, stays out of the list.
+
 
 Use `$` in the composer to select a skill. Skills marked `disable-model-invocation`
 can still be started by you. Invoke those one per message: Claude directly runs
