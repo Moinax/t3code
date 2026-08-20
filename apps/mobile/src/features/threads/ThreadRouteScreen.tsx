@@ -776,6 +776,11 @@ function ThreadRouteContent(
           selectedThreadFeed={composer.selectedThreadFeed}
           activeWorkStartedAt={composer.activeWorkStartedAt}
           isCompacting={composer.isCompacting}
+          compactingSince={
+            selectedThread.session?.statusDetail === "compacting"
+              ? selectedThread.session.updatedAt
+              : null
+          }
           activePendingApproval={requests.activePendingApproval}
           respondingApprovalId={requests.respondingApprovalId}
           activePendingUserInput={requests.activePendingUserInput}

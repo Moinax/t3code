@@ -141,7 +141,6 @@ import {
 } from "@t3tools/mobile-markdown-text/links";
 import {
   deriveThreadFeedPresentation,
-  isContextCompactionActivityGroup,
   type ThreadFeedEntry,
   type ThreadFeedLatestTurn,
 } from "../../lib/threadActivity";
@@ -229,6 +228,8 @@ export interface ThreadFeedProps {
   readonly agentLabel: string;
   readonly latestTurn: ThreadFeedLatestTurn | null;
   readonly activeWorkStartedAt: string | null;
+  /** Set while the provider compacts context; the busy chrome says so. */
+  readonly compactingSince: string | null;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
@@ -1336,6 +1337,22 @@ function renderFeedEntry(
   const entry = info.item;
   const { markdownStyles, iconSubtleColor, userBubbleColor } = props;
 
+  if (entry.type === "compaction") {
+    return (
+      <View className="mb-3 min-h-11 flex-row items-center border-b border-adaptive-neutral-200-a80-white-a8 px-2">
+        <Text
+          className={
+            entry.failed
+              ? "font-t3-medium text-sm tabular-nums text-danger-foreground"
+              : "font-t3-medium text-sm tabular-nums text-foreground-muted"
+          }
+        >
+          {entry.label}
+        </Text>
+      </View>
+    );
+  }
+
   if (entry.type === "turn-fold") {
     return (
       <Pressable
@@ -1382,29 +1399,6 @@ function renderFeedEntry(
         shimmer={entry.shimmer}
         onToggle={() => props.onToggleWorkGroup(entry.groupId, entry.id)}
       />
-    );
-  }
-
-  if (entry.type === "activity-group" && isContextCompactionActivityGroup(entry)) {
-    const label = entry.activities[0]!.summary;
-    return (
-      <View
-        accessible
-        accessibilityLabel={label}
-        className="mb-3 flex-row items-center gap-3 px-1 py-1"
-      >
-        <View className="h-px flex-1 bg-adaptive-neutral-200-a80-white-a8" />
-        <View className="shrink-0 flex-row items-center gap-1.5">
-          <SymbolView
-            name="arrow.down.right.and.arrow.up.left"
-            size={12}
-            tintColor={iconSubtleColor}
-            type="monochrome"
-          />
-          <Text className="font-t3-medium text-xs text-foreground-muted">{label}</Text>
-        </View>
-        <View className="h-px flex-1 bg-adaptive-neutral-200-a80-white-a8" />
-      </View>
     );
   }
 
@@ -2568,13 +2562,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       }
       switch (entry.type) {
         case "turn-fold":
+        case "compaction":
           return TURN_FOLD_HEIGHT;
         case "work-toggle":
           return WORK_GROUP_TOGGLE_HEIGHT;
         case "activity-group":
-          if (isContextCompactionActivityGroup(entry)) {
-            return undefined;
-          }
           // Expanded rows append a variable detail block — fall back to
           // measurement for those groups.
           return entry.activities.some((activity) => expandedWorkRows[activity.id])
@@ -2817,6 +2809,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         </View>
         {props.feed.length === 0 &&
         props.activeWorkStartedAt === null &&
+        props.compactingSince === null &&
         props.contentPresentation.kind === "ready" ? (
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
             <ThreadFeedPlaceholder

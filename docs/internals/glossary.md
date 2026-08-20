@@ -45,3 +45,5 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Checkpoint          | A saved workspace state used for diffs and restore, stored as a hidden Git ref.                              |
 | Checkpoint baseline | The workspace state captured before the work being compared.                                                 |
 | Turn diff           | The workspace changes attributed to one turn.                                                                |
+
+| Compaction | A provider summarizing context to reclaim its context window. The session reports `statusDetail: compacting`; completion produces a `context-compaction` activity with the result. Claude, Codex, and OpenCode support it. |

@@ -56,6 +56,7 @@ const RuntimeSessionState = Schema.Literals([
   "ready",
   "running",
   "waiting",
+  "compacting",
   "stopped",
   "error",
 ]);

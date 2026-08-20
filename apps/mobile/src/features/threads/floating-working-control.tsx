@@ -47,7 +47,7 @@ export const FLOATING_WORKING_CONTROL_COVERAGE = CONTROL_HEIGHT + CONTROL_COMPOS
  * label swaps in place instead of one pill fading out for another.
  */
 export type FloatingWorkingStatus =
-  | { readonly kind: "working"; readonly startedAt: string }
+  | { readonly kind: "working"; readonly startedAt: string; readonly compacting: boolean }
   | { readonly kind: "syncing"; readonly label: string }
   | { readonly kind: "compacting" };
 
@@ -198,10 +198,15 @@ function FloatingStatusLabel(props: { readonly status: FloatingWorkingStatus }) 
   if (props.status.kind === "compacting") {
     return <CompactingLabel />;
   }
-  return <WorkingDuration startedAt={props.status.startedAt} />;
+  return (
+    <WorkingDuration
+      startedAt={props.status.startedAt}
+      compacting={props.status.compacting}
+    />
+  );
 }
 
-function WorkingDuration(props: { readonly startedAt: string }) {
+function WorkingDuration(props: { readonly startedAt: string; readonly compacting: boolean }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -211,11 +216,12 @@ function WorkingDuration(props: { readonly startedAt: string }) {
   }, [props.startedAt]);
 
   const duration = formatWorkingDuration(props.startedAt, nowMs);
-  const label = `Working for ${duration}`;
+  const prefix = props.compacting ? "Compacting context for" : "Working for";
+  const label = `${prefix} ${duration}`;
 
   return (
     <View accessible accessibilityLabel={label} className="h-11 flex-row items-center px-4">
-      <Text className="font-t3-medium text-xs text-foreground">Working for </Text>
+      <Text className="font-t3-medium text-xs text-foreground">{prefix} </Text>
       <SystemText
         className="text-xs text-foreground"
         style={{ fontVariant: ["tabular-nums"], fontWeight: "500" }}

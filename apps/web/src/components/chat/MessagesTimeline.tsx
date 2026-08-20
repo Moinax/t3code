@@ -307,6 +307,8 @@ interface MessagesTimelineProps {
   isPreparingWorktree?: boolean;
   isCompacting?: boolean;
   activeTurnStartedAt: string | null;
+  /** Set while the provider compacts context; the working row says so. */
+  compactingSince?: string | null;
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   latestTurn: TimelineLatestTurn | null;
@@ -363,6 +365,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isPreparingWorktree = false,
   isCompacting = false,
   activeTurnStartedAt,
+  compactingSince = null,
   agentPanelModel = EMPTY_AGENT_PANEL_MODEL,
   onOpenAgents = NOOP_OPEN_AGENTS,
   listRef,
@@ -543,6 +546,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         expandedWorkGroupIds,
         isWorking,
         activeTurnStartedAt,
+        compactingSince,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
       },
@@ -563,6 +567,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     expandedWorkGroupIds,
     isWorking,
     activeTurnStartedAt,
+    compactingSince,
     turnDiffSummaryByAssistantMessageId,
     revertTurnCountByUserMessageId,
   ]);
@@ -1186,7 +1191,10 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
           ? "pb-1"
           : isExpandedToolGroupHeader
             ? "pb-0"
-            : row.kind === "turn-fold" || row.kind === "working"
+            : row.kind === "turn-fold" ||
+                row.kind === "working" ||
+                row.kind === "thinking" ||
+                row.kind === "compaction"
               ? "pb-1.5"
               : (row.kind === "message" &&
                     row.message.role === "assistant" &&
@@ -1220,7 +1228,6 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "work-live" ? <LiveWorkEntryTimelineRow row={row} /> : null}
       {row.kind === "work-toggle" ? <WorkGroupToggleTimelineRow row={row} /> : null}
       {row.kind === "turn-fold" ? <TurnFoldTimelineRow row={row} /> : null}
-      {row.kind === "context-compaction" ? <ContextCompactionTimelineRow row={row} /> : null}
       {row.kind === "message" && row.message.role === "user" ? <UserTimelineRow row={row} /> : null}
       {row.kind === "message" && row.message.role === "assistant" ? (
         <AssistantTimelineRow row={row} />
@@ -1229,30 +1236,10 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "thinking" ? <ThinkingTimelineRow /> : null}
+      {row.kind === "compaction" ? <CompactionTimelineRow row={row} /> : null}
     </div>
   );
 });
-
-function ContextCompactionTimelineRow({
-  row,
-}: {
-  row: Extract<TimelineRow, { kind: "context-compaction" }>;
-}) {
-  return (
-    <div
-      role="separator"
-      aria-label={row.label}
-      className="mx-auto flex w-full max-w-3xl items-center gap-3 py-1 text-muted-foreground text-xs"
-    >
-      <span className="h-px flex-1 bg-border/70" />
-      <span className="flex shrink-0 items-center gap-1.5">
-        <Minimize2Icon aria-hidden="true" className="size-3" />
-        {row.label}
-      </span>
-      <span className="h-px flex-1 bg-border/70" />
-    </div>
-  );
-}
 
 function UserVideoAttachment({ file }: { readonly file: ChatFileAttachment }) {
   const ctx = use(TimelineRowCtx);
@@ -1554,6 +1541,25 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
   );
 }
 
+/**
+ * Compaction result row — a thread lifecycle marker at the same level as the
+ * "Worked for N" fold, never part of it.
+ */
+function CompactionTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "compaction" }> }) {
+  return (
+    <div className="border-b border-border/60 pb-2 pt-1">
+      <div
+        className={cn(
+          "px-1 text-sm leading-relaxed tabular-nums",
+          row.failed ? "text-destructive/90" : "text-muted-foreground",
+        )}
+      >
+        {row.label}
+      </div>
+    </div>
+  );
+}
+
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
@@ -1708,7 +1714,15 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
     <div className="border-b border-border/60 pb-2 pt-1">
       <div className="flex h-6 min-w-0 items-baseline px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
         <span
-          key={isPreparingWorktree ? "setup" : isCompacting ? "compacting" : "working"}
+          key={
+            isPreparingWorktree
+              ? "setup"
+              : row.compactingSince
+                ? "compacting-timed"
+                : isCompacting
+                  ? "compacting"
+                  : "working"
+          }
           ref={isPreparingWorktree || isCompacting ? observeVisibleAnimation : undefined}
           className="relative shrink-0 overflow-hidden whitespace-nowrap transition-opacity duration-150 starting:opacity-0 motion-reduce:transition-none"
         >
@@ -1716,6 +1730,10 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
             <>
               Setting up worktree…
               <ActivityShimmerOverlay>Setting up worktree…</ActivityShimmerOverlay>
+            </>
+          ) : row.compactingSince ? (
+            <>
+              Compacting context for <WorkingTimer createdAt={row.compactingSince} />
             </>
           ) : isCompacting ? (
             <>

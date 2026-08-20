@@ -419,7 +419,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const selected = props.selected === true;
 
   const status = resolveThreadListV2Status(thread);
-  const statusLabel = STATUS_LABEL_BY_STATUS[status];
+  // Compaction can run on a ready session, so it outranks the derived status.
+  const statusLabel =
+    thread.session?.statusDetail === "compacting"
+      ? { label: "Compacting", className: "text-sky-600 dark:text-sky-400" }
+      : STATUS_LABEL_BY_STATUS[status];
   // Settled rows label by the same stamp they sort by, so order and label
   // can't disagree. updatedAt is always present, so the resolver never
   // returns null here.

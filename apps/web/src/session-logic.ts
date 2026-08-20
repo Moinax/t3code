@@ -34,6 +34,7 @@ import {
   type ThreadSession,
   type TurnDiffSummary,
 } from "./types";
+import { formatContextWindowTokens } from "./lib/contextWindow";
 
 export { formatDuration } from "@t3tools/shared/orchestrationTiming";
 
@@ -815,6 +816,35 @@ function isNoContentRuntimeWarning(activity: OrchestrationThreadActivity): boole
   );
 }
 
+/**
+ * Claude's compact_boundary rides in the activity's raw detail and carries
+ * compact_metadata (pre/post token counts, duration); other providers report
+ * a bare "Context compacted". Returns label suffix parts for what's present.
+ */
+function contextCompactionMetaParts(payload: Record<string, unknown> | null): string[] {
+  const meta = asRecord(asRecord(payload?.detail)?.compact_metadata);
+  if (!meta) {
+    return [];
+  }
+  const parts: string[] = [];
+  const preTokens = asPositiveFinite(meta.pre_tokens);
+  const postTokens = asPositiveFinite(meta.post_tokens);
+  if (preTokens !== null && postTokens !== null) {
+    parts.push(
+      `${formatContextWindowTokens(preTokens)} → ${formatContextWindowTokens(postTokens)} tokens`,
+    );
+  }
+  const durationMs = asPositiveFinite(meta.duration_ms);
+  if (durationMs !== null) {
+    parts.push(formatDuration(durationMs));
+  }
+  return parts;
+}
+
+function asPositiveFinite(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {
   if (activity.kind !== "tool.updated" && activity.kind !== "tool.completed") {
     return false;
@@ -897,6 +927,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
           : activity.tone,
     sourceActivityKind: activity.kind,
   };
+  if (activity.kind === "context-compaction") {
+    const metaParts = contextCompactionMetaParts(payload);
+    if (metaParts.length > 0) {
+      entry.label = [activity.summary, ...metaParts].join(" · ");
+    }
+  }
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   const viewedImagePath = asTrimmedString(asRecord(payload?.data)?.imagePath);

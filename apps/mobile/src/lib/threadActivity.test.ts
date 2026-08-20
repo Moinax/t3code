@@ -602,9 +602,10 @@ describe("buildThreadFeed", () => {
     const presented = deriveThreadFeedPresentation(buildThreadFeed(thread), null, new Set());
     expect(presented).toMatchObject([
       {
-        type: "activity-group",
+        type: "compaction",
         id: "context-compaction",
-        activities: [{ summary: "Compacted context 899K → 19K tokens" }],
+        label: "Compacted context 899K → 19K tokens",
+        failed: false,
       },
     ]);
   });
@@ -1022,6 +1023,83 @@ describe("buildThreadFeed", () => {
         type: "activity-group",
         activities: [{ id: "activity-signal" }],
       },
+    ]);
+  });
+
+  it("labels context compaction entries with token delta and duration when provided", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-compaction"),
+      projectId: ProjectId.make("project-1"),
+      title: "Compaction thread",
+      activities: [
+        makeActivity({
+          id: EventId.make("activity-compaction"),
+          kind: "context-compaction",
+          summary: "Context compacted",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          turnId: TurnId.make("turn-1"),
+          payload: {
+            state: "compacted",
+            detail: {
+              compact_metadata: {
+                trigger: "auto",
+                pre_tokens: 148_000,
+                post_tokens: 12_400,
+                duration_ms: 45_000,
+              },
+            },
+          },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    expect(feed).toMatchObject([
+      {
+        type: "compaction",
+        id: "activity-compaction",
+        label: "Context compacted · 148k → 12k tokens · 45s",
+        failed: false,
+      },
+    ]);
+
+    // Compaction is not work: nothing folds, the result row stays visible.
+    const presented = deriveThreadFeedPresentation(feed, null, new Set());
+    expect(presented.some((entry) => entry.type === "turn-fold")).toBe(false);
+    expect(presented).toMatchObject([{ type: "compaction" }]);
+  });
+
+  it("folds a mixed turn's work around the compaction row without counting it", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-mixed-compaction"),
+      projectId: ProjectId.make("project-1"),
+      title: "Mixed compaction thread",
+      activities: [
+        makeActivity({
+          id: EventId.make("activity-tool"),
+          kind: "tool.completed",
+          summary: "Ran a command",
+          createdAt: "2026-04-01T00:00:05.000Z",
+          turnId: TurnId.make("turn-1"),
+          tone: "tool",
+        }),
+        makeActivity({
+          id: EventId.make("activity-compaction"),
+          kind: "context-compaction",
+          summary: "Context compacted",
+          createdAt: "2026-04-01T00:02:00.000Z",
+          turnId: TurnId.make("turn-1"),
+          payload: { state: "compacted" },
+        }),
+      ],
+    });
+
+    // The fold covers only the work; the compaction row stays a sibling and
+    // its timestamp never inflates the worked duration.
+    const presented = deriveThreadFeedPresentation(buildThreadFeed(thread), null, new Set());
+    expect(presented).toMatchObject([
+      { type: "turn-fold", label: "Worked for 1ms" },
+      { type: "compaction", label: "Context compacted" },
     ]);
   });
 

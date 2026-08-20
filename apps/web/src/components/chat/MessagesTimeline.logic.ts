@@ -322,12 +322,6 @@ export type MessagesTimelineRow =
       expanded: boolean;
     }
   | {
-      kind: "context-compaction";
-      id: string;
-      createdAt: string;
-      label: string;
-    }
-  | {
       kind: "message";
       id: string;
       createdAt: string;
@@ -357,11 +351,19 @@ export type MessagesTimelineRow =
       kind: "working";
       id: string;
       createdAt: string | null;
+      compactingSince: string | null;
     }
   | {
       kind: "thinking";
       id: string;
       createdAt: string | null;
+    }
+  | {
+      kind: "compaction";
+      id: string;
+      createdAt: string;
+      label: string;
+      failed: boolean;
     };
 
 export interface StableMessagesTimelineRowsState {
@@ -613,11 +615,22 @@ function deriveTurnFolds(input: {
     if (group.hasStreamingMessage) {
       continue;
     }
+    // Compaction rows are thread lifecycle markers, not work: they render as
+    // first-class rows, so they neither fold, anchor the fold, nor count
+    // toward the worked duration. A turn that was only a compaction has
+    // nothing to fold and reads as the compaction row alone.
+    const foldableEntries = group.entries.filter(
+      (entry) =>
+        !(entry.kind === "work" && entry.entry.sourceActivityKind === "context-compaction"),
+    );
     const hiddenEntryIds = new Set<string>();
     const terminalEntryIndex = group.terminalEntry
       ? group.entries.findIndex((entry) => entry.id === group.terminalEntry?.id)
       : group.entries.length;
     for (const [index, entry] of group.entries.entries()) {
+      if (entry.kind === "work" && entry.entry.sourceActivityKind === "context-compaction") {
+        continue;
+      }
       if (entry.id === group.terminalEntry?.id) {
         continue;
       }
@@ -652,9 +665,9 @@ function deriveTurnFolds(input: {
       continue;
     }
 
-    const firstEntry = group.entries[0];
-    const firstHiddenEntry = group.entries.find((entry) => hiddenEntryIds.has(entry.id));
-    const lastEntry = group.entries.at(-1);
+    const firstEntry = foldableEntries[0];
+    const firstHiddenEntry = foldableEntries.find((entry) => hiddenEntryIds.has(entry.id));
+    const lastEntry = foldableEntries.at(-1);
     if (!firstEntry || !firstHiddenEntry || !lastEntry) {
       continue;
     }
@@ -786,6 +799,8 @@ export function deriveMessagesTimelineRows(input: {
   expandedWorkGroupIds?: ReadonlySet<string>;
   isWorking: boolean;
   activeTurnStartedAt: string | null;
+  /** Set while the provider compacts context; the working row says so. */
+  compactingSince?: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
@@ -898,6 +913,7 @@ export function deriveMessagesTimelineRows(input: {
       kind: "working",
       id: "working-indicator-row",
       createdAt: visualResponseStartedAt,
+      compactingSince: input.compactingSince ?? null,
     });
   };
   let hasActivityRow = false;
@@ -949,15 +965,18 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    // Compaction is a thread lifecycle marker, not work: it gets its own
+    // first-class row instead of joining the work-log grouping.
     if (
       timelineEntry.kind === "work" &&
       timelineEntry.entry.sourceActivityKind === "context-compaction"
     ) {
       nextRows.push({
-        kind: "context-compaction",
+        kind: "compaction",
         id: timelineEntry.id,
         createdAt: timelineEntry.createdAt,
         label: timelineEntry.entry.label,
+        failed: timelineEntry.entry.tone === "error",
       });
       continue;
     }
@@ -1156,6 +1175,18 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
+  // Compaction can outlive its turn (or run without one): the session settles
+  // to ready while statusDetail still says compacting, so the busy row rides
+  // on compactingSince alone.
+  if (!input.isWorking && input.compactingSince) {
+    nextRows.push({
+      kind: "working",
+      id: "working-indicator-row",
+      createdAt: null,
+      compactingSince: input.compactingSince,
+    });
+  }
+
   return attachTrailingToolGroupsToAssistant(nextRows);
 }
 
@@ -1237,7 +1268,11 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
   if (a.kind !== b.kind || a.id !== b.id) return false;
 
   switch (a.kind) {
-    case "working":
+    case "working": {
+      const bw = b as typeof a;
+      return a.createdAt === bw.createdAt && a.compactingSince === bw.compactingSince;
+    }
+
     case "thinking":
       return a.createdAt === (b as typeof a).createdAt;
 
@@ -1256,9 +1291,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       return a.createdAt === bf.createdAt && a.label === bf.label && a.expanded === bf.expanded;
     }
 
-    case "context-compaction": {
+    case "compaction": {
       const bc = b as typeof a;
-      return a.createdAt === bc.createdAt && a.label === bc.label;
+      return a.createdAt === bc.createdAt && a.label === bc.label && a.failed === bc.failed;
     }
 
     case "proposed-plan":

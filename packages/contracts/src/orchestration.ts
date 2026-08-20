@@ -395,9 +395,18 @@ export const OrchestrationSessionStatus = Schema.Literals([
 ]);
 export type OrchestrationSessionStatus = typeof OrchestrationSessionStatus.Type;
 
+/**
+ * Qualifies a "running" status with what the provider is busy doing when that
+ * work is not turn progress. Optional so clients that predate a detail keep
+ * decoding sessions; absent means ordinary turn work.
+ */
+export const OrchestrationSessionStatusDetail = Schema.Literals(["compacting"]);
+export type OrchestrationSessionStatusDetail = typeof OrchestrationSessionStatusDetail.Type;
+
 export const OrchestrationSession = Schema.Struct({
   threadId: ThreadId,
   status: OrchestrationSessionStatus,
+  statusDetail: Schema.optional(OrchestrationSessionStatusDetail),
   providerName: Schema.NullOr(TrimmedNonEmptyString),
   providerInstanceId: Schema.optional(ProviderInstanceId),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),

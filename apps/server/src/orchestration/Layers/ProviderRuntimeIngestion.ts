@@ -311,13 +311,26 @@ function normalizeRuntimeTurnState(
 }
 
 function orchestrationSessionStatusFromRuntimeState(
-  state: "starting" | "running" | "waiting" | "ready" | "interrupted" | "stopped" | "error",
+  state:
+    | "starting"
+    | "running"
+    | "waiting"
+    | "compacting"
+    | "ready"
+    | "interrupted"
+    | "stopped"
+    | "error",
 ): "starting" | "running" | "ready" | "interrupted" | "stopped" | "error" {
   switch (state) {
     case "starting":
       return "starting";
     case "running":
     case "waiting":
+    // Compaction alone never drives the turn lifecycle — the session status
+    // during a compacting write is derived from the active turn where the
+    // event is applied; this mapping only covers the mid-turn case so an
+    // active turn survives the write (see sessionStatusAllowsActiveTurn).
+    case "compacting":
       return "running";
     case "ready":
       return "ready";
@@ -879,6 +892,29 @@ export function runtimeEventToActivities(
     }
 
     case "item.completed": {
+      // Providers that report compaction as an item (Codex natively, Claude
+      // for failures) land here; the thread.state.changed "compacted" case
+      // below covers providers that report it as a thread state. Same
+      // activity kind either way so clients render one row shape.
+      if (event.payload.itemType === "context_compaction") {
+        const failed = event.payload.status === "failed";
+        return [
+          {
+            id: event.eventId,
+            createdAt: event.createdAt,
+            tone: failed ? "error" : "info",
+            kind: "context-compaction",
+            summary: failed ? "Context compaction failed" : "Context compacted",
+            payload: {
+              state: failed ? "failed" : "compacted",
+              ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+              ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+            },
+            turnId: toTurnId(event.turnId) ?? null,
+            ...maybeSequence,
+          },
+        ];
+      }
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
@@ -1663,6 +1699,17 @@ const make = Effect.gen(function* () {
         const status = (() => {
           switch (event.type) {
             case "session.state.changed": {
+              // Compaction is not turn work: it overlays the lifecycle on
+              // statusDetail and leaves the status itself alone, so a
+              // standalone compaction neither busies a settled thread nor
+              // revives an errored one. Without a session yet, the turn
+              // decides.
+              if (event.payload.state === "compacting") {
+                return (
+                  thread.session?.status ??
+                  (activeTurnId !== null ? "running" : hasPendingTurnStart ? "starting" : "ready")
+                );
+              }
               const runtimeStatus = orchestrationSessionStatusFromRuntimeState(event.payload.state);
               return hasPendingTurnStart && runtimeStatus === "ready" ? "starting" : runtimeStatus;
             }
@@ -1673,14 +1720,16 @@ const make = Effect.gen(function* () {
             case "turn.aborted":
               return "interrupted";
             case "turn.completed":
-              return normalizeRuntimeTurnState(event.payload.state) === "failed"
-                ? "error"
-                : "ready";
+              return normalizeRuntimeTurnState(event.payload.state) === "failed" ? "error" : "ready";
             case "session.started":
             case "thread.started":
               // Provider thread/session start notifications can arrive during an
               // active or pending turn; preserve that lifecycle state.
-              return activeTurnId !== null ? "running" : hasPendingTurnStart ? "starting" : "ready";
+              return activeTurnId !== null
+                ? "running"
+                : hasPendingTurnStart
+                  ? "starting"
+                  : "ready";
           }
         })();
         const nextActiveTurnId =
@@ -1703,6 +1752,33 @@ const make = Effect.gen(function* () {
               : status === "ready" || status === "interrupted"
                 ? null
                 : (thread.session?.lastError ?? null);
+        // The compacting state raises the detail. Turn lifecycle and start
+        // notifications say nothing about compaction, so they carry an
+        // in-flight detail forward — a turn ending mid-compaction settles the
+        // turn while the compacting overlay stays up. Terminal states
+        // (error, stopped) and every other write clear it.
+        const statusDetail =
+          event.type === "session.state.changed"
+            ? event.payload.state === "compacting"
+              ? ("compacting" as const)
+              : undefined
+            : (event.type === "turn.completed" ||
+                  event.type === "session.started" ||
+                  event.type === "thread.started") &&
+                status !== "error" &&
+                status !== "stopped"
+              ? thread.session?.statusDetail
+              : undefined;
+        // Clients read the session's updatedAt as when compaction began, so a
+        // write that only re-affirms an in-flight compaction keeps it stable —
+        // except a turn completion, whose updatedAt is the projector's
+        // authoritative turn-end timestamp and must reflect the actual write.
+        const compactingSince =
+          event.type !== "turn.completed" &&
+          statusDetail === "compacting" &&
+          thread.session?.statusDetail === "compacting"
+            ? thread.session.updatedAt
+            : null;
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
@@ -1732,6 +1808,7 @@ const make = Effect.gen(function* () {
             session: {
               threadId: thread.id,
               status,
+              ...(statusDetail !== undefined ? { statusDetail } : {}),
               providerName: event.provider,
               ...(event.providerInstanceId !== undefined
                 ? { providerInstanceId: event.providerInstanceId }
@@ -1739,7 +1816,7 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: nextActiveTurnId,
               lastError,
-              updatedAt: now,
+              updatedAt: compactingSince ?? now,
             },
             createdAt: now,
           });
