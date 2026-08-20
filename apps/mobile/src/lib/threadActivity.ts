@@ -205,6 +205,14 @@ export type ThreadFeedEntry =
       readonly activity: ThreadFeedActivity;
       readonly expanded: boolean;
       readonly summary: AgentSpawnSummary;
+    }
+  | {
+      readonly type: "compaction";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly turnId: TurnId | null;
+      readonly label: string;
+      readonly failed: boolean;
     };
 
 export interface AgentSpawnSummary {
@@ -448,6 +456,57 @@ function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): bool
   return typeof payload?.detail === "string" && payload.detail.startsWith("ExitPlanMode:");
 }
 
+/**
+ * Claude's compact_boundary rides in the activity's raw detail and carries
+ * compact_metadata (pre/post token counts, duration); other providers report
+ * a bare "Context compacted". Returns label suffix parts for what's present.
+ * Mirrors `contextCompactionMetaParts` in apps/web/src/session-logic.ts.
+ */
+function contextCompactionMetaParts(payload: Record<string, unknown> | null): string[] {
+  const detail =
+    payload?.detail && typeof payload.detail === "object" && !Array.isArray(payload.detail)
+      ? (payload.detail as Record<string, unknown>)
+      : null;
+  const meta =
+    detail?.compact_metadata &&
+    typeof detail.compact_metadata === "object" &&
+    !Array.isArray(detail.compact_metadata)
+      ? (detail.compact_metadata as Record<string, unknown>)
+      : null;
+  if (!meta) {
+    return [];
+  }
+  const parts: string[] = [];
+  const preTokens = asPositiveFinite(meta.pre_tokens);
+  const postTokens = asPositiveFinite(meta.post_tokens);
+  if (preTokens !== null && postTokens !== null) {
+    parts.push(`${formatCompactionTokens(preTokens)} → ${formatCompactionTokens(postTokens)} tokens`);
+  }
+  const durationMs = asPositiveFinite(meta.duration_ms);
+  if (durationMs !== null) {
+    parts.push(formatDuration(durationMs));
+  }
+  return parts;
+}
+
+function asPositiveFinite(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Mirrors `formatContextWindowTokens` in apps/web/src/lib/contextWindow.ts. */
+function formatCompactionTokens(value: number): string {
+  if (value < 1_000) {
+    return `${Math.round(value)}`;
+  }
+  if (value < 10_000) {
+    return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  if (value < 1_000_000) {
+    return `${Math.round(value / 1_000)}k`;
+  }
+  return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
+}
+
 const decodeQuestionAttachmentAnswer = Schema.decodeUnknownOption(UserInputAttachmentAnswerPayload);
 
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
@@ -519,6 +578,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       (typeof payload.workflowName === "string" && payload.workflowName.length > 0)
     ) {
       entry.isWorkflowCoordinator = true;
+    }
+  }
+  if (activity.kind === "context-compaction") {
+    const metaParts = contextCompactionMetaParts(payload);
+    if (metaParts.length > 0) {
+      entry.label = [activity.summary, ...metaParts].join(" · ");
     }
   }
   const itemType = extractWorkLogItemType(payload);
@@ -1554,15 +1619,25 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
       continue;
     }
 
-    const isCompaction = entry.activity.workEntry.sourceActivityKind === "context-compaction";
-    if (isCompaction || firstActivityEntry?.turnId !== entry.turnId) {
+    // Compaction is a thread lifecycle marker, not work: it becomes its own
+    // first-class row instead of joining an activity group.
+    if (entry.activity.workEntry.sourceActivityKind === "context-compaction") {
+      flushGroup();
+      grouped.push({
+        type: "compaction",
+        id: entry.id,
+        createdAt: entry.createdAt,
+        turnId: entry.turnId,
+        label: entry.activity.summary,
+        failed: entry.activity.status === "failure",
+      });
+      continue;
+    }
+    if (firstActivityEntry?.turnId !== entry.turnId) {
       flushGroup();
     }
     firstActivityEntry ??= entry;
     openGroupActivities.push(entry.activity);
-    if (isCompaction) {
-      flushGroup();
-    }
   }
   flushGroup();
   return grouped;
@@ -1631,7 +1706,7 @@ function deriveThreadFeedTurnFolds(
     const turnId =
       entry.type === "message" && entry.message.role === "assistant"
         ? entry.message.turnId
-        : entry.type === "activity-group"
+        : entry.type === "activity-group" || entry.type === "compaction"
           ? entry.turnId
           : null;
     if (!turnId) {
@@ -1662,8 +1737,14 @@ function deriveThreadFeedTurnFolds(
 
     const firstAssistantMessageId = firstAssistantMessageIdByTurn.get(turnId);
     const terminalAssistantMessageId = terminalAssistantMessageIdByTurn.get(turnId);
+    // Compaction rows are thread lifecycle markers, not work: they render as
+    // first-class rows, so they neither fold, anchor the fold, nor count
+    // toward the worked duration. A turn that was only a compaction has
+    // nothing to fold and reads as the compaction row alone. Mirrors the
+    // exclusion in apps/web/src/components/chat/MessagesTimeline.logic.ts.
+    const foldableEntries = entries.filter((entry) => entry.type !== "compaction");
     const hiddenEntryIds = new Set(
-      entries
+      foldableEntries
         .filter(
           (entry) =>
             entry.id !== firstAssistantMessageId && entry.id !== terminalAssistantMessageId,
@@ -1684,9 +1765,9 @@ function deriveThreadFeedTurnFolds(
       continue;
     }
 
-    const firstEntry = entries[0];
-    const firstHiddenEntry = entries.find((entry) => hiddenEntryIds.has(entry.id));
-    const lastEntry = entries.at(-1);
+    const firstEntry = foldableEntries[0];
+    const firstHiddenEntry = foldableEntries.find((entry) => hiddenEntryIds.has(entry.id));
+    const lastEntry = foldableEntries.at(-1);
     if (!firstEntry || !firstHiddenEntry || !lastEntry) {
       continue;
     }

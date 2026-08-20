@@ -6,7 +6,7 @@ import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connect
  * another. The connection variant is tappable and triggers a reconnect.
  */
 export type FloatingWorkingStatus =
-  | { readonly kind: "working"; readonly startedAt: string }
+  | { readonly kind: "working"; readonly startedAt: string; readonly compacting: boolean }
   | { readonly kind: "syncing"; readonly label: string }
   | { readonly kind: "compacting" }
   // A task whose thread the server has not created yet: the worktree may

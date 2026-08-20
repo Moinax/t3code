@@ -127,6 +127,8 @@ export interface ThreadDetailScreenProps {
     | { readonly kind: "preparing"; readonly preparingWorktree: boolean }
     | { readonly kind: "failed"; readonly reason: string; readonly onEditTask: () => void }
     | null;
+  /** Set while the provider compacts context; the working row says so. */
+  readonly compactingSince: string | null;
   readonly activePendingApproval: PendingApproval | null;
   readonly respondingApprovalId: ApprovalRequestId | null;
   readonly activePendingUserInput: PendingUserInput | null;
@@ -346,8 +348,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     }
   })();
   // One floating pill above the composer: it reads the connection phase while
-  // disconnected, the sync state while messages load, then the working timer
-  // once the feed is settled.
+  // disconnected, the creation or sync state while the thread loads, then the
+  // working or compaction timer once the feed is settled.
   const floatingStatus = ((): FloatingWorkingStatus | null => {
     const connectionStatus = connectionFloatingStatus({
       connectionError: props.connectionError,
@@ -373,11 +375,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     if (threadSyncLabel !== null) {
       return { kind: "syncing", label: threadSyncLabel };
     }
+    const workStartedAt = props.compactingSince ?? props.activeWorkStartedAt;
+    if (workStartedAt !== null && contentPresentationKind === "ready") {
+      return {
+        kind: "working",
+        startedAt: workStartedAt,
+        compacting: props.compactingSince !== null,
+      };
+    }
     if (props.isCompacting && contentPresentationKind === "ready") {
       return { kind: "compacting" };
-    }
-    if (props.activeWorkStartedAt !== null && contentPresentationKind === "ready") {
-      return { kind: "working", startedAt: props.activeWorkStartedAt };
     }
     return null;
   })();
@@ -883,6 +890,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             agentLabel={agentLabel}
             latestTurn={props.selectedThread.latestTurn}
             activeWorkStartedAt={props.activeWorkStartedAt}
+            compactingSince={props.compactingSince}
             listRef={listRef}
             freeze={freeze}
             anchorMessageId={anchorMessageId}

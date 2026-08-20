@@ -322,7 +322,12 @@ function FloatingStatusLabel(props: {
     );
   }
   return (
-    <WorkingDuration key="working" startedAt={props.status.startedAt} onLayout={props.onLayout} />
+    <WorkingDuration
+      key="working"
+      startedAt={props.status.startedAt}
+      compacting={props.status.compacting}
+      onLayout={props.onLayout}
+    />
   );
 }
 
@@ -363,6 +368,7 @@ function StatusLabelRow(props: {
 
 function WorkingDuration(props: {
   readonly startedAt: string;
+  readonly compacting: boolean;
   readonly onLayout: (event: LayoutChangeEvent) => void;
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -374,11 +380,12 @@ function WorkingDuration(props: {
   }, [props.startedAt]);
 
   const duration = formatWorkingDuration(props.startedAt, nowMs);
-  const label = `Working for ${duration}`;
+  const prefix = props.compacting ? "Compacting context for" : "Working for";
+  const label = `${prefix} ${duration}`;
 
   return (
     <StatusLabelRow accessibilityLabel={label} onLayout={props.onLayout}>
-      <Text className="font-t3-medium text-xs text-foreground">Working for </Text>
+      <Text className="font-t3-medium text-xs text-foreground">{prefix} </Text>
       <SystemText
         className="text-xs text-foreground"
         style={{ fontVariant: ["tabular-nums"], fontWeight: "500" }}
