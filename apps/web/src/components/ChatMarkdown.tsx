@@ -2462,6 +2462,9 @@ function useChatMarkdownState({
       const parentSuffix = fileLinkParentSuffixByPath.get(
         fileLinkMeta.filePath.replaceAll("\\", "/"),
       );
+      // The integrated browser serves workspace files only, so a path outside the
+      // root (/tmp/...) would open on an asset the server refuses to sign.
+      const previewPath = fileLinkMeta.workspaceRelativePath;
       const labelParts = [fileLinkMeta.basename];
       if (typeof parentSuffix === "string" && parentSuffix.length > 0) {
         labelParts.push(parentSuffix);
@@ -2510,9 +2513,10 @@ function useChatMarkdownState({
           revealLabel={revealInFileManagerLabel}
           onOpenInBrowser={
             threadRef &&
+            previewPath !== null &&
             isPreviewSupportedInRuntime() &&
-            isBrowserPreviewFile(fileLinkMeta.filePath)
-              ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
+            isBrowserPreviewFile(previewPath)
+              ? () => openMarkdownFileInPreview(previewPath)
               : undefined
           }
           className={className}
