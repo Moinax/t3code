@@ -1,3 +1,4 @@
+import { PreviewAutomationUnavailableError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type {
   PreviewAutomationOperation,
@@ -44,7 +45,18 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   import("@t3tools/contracts").PreviewAutomationError,
   McpInvocationContext.McpInvocationContext | PreviewAutomationBroker.PreviewAutomationBroker
 > {
-  const scope = yield* McpInvocationContext.requireMcpCapability("preview");
+  const scope = yield* McpInvocationContext.requireMcpCapability("preview").pipe(
+    Effect.mapError(
+      (error) =>
+        new PreviewAutomationUnavailableError({
+          capability: "preview",
+          environmentId: error.environmentId,
+          threadId: error.threadId,
+          providerSessionId: error.providerSessionId,
+          providerInstanceId: error.providerInstanceId,
+        }),
+    ),
+  );
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   return yield* broker.invoke<A>({
     scope,

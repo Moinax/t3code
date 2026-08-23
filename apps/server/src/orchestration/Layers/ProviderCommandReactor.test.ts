@@ -1404,6 +1404,62 @@ describe("ProviderCommandReactor", () => {
     expect(attempts).toBe(2);
   });
 
+  it("keeps a title thread_set_title wrote while the first-turn summarizer runs", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const seededTitle = "/start OCT-658";
+    const generatedTitle = await harness.runEffect(
+      Deferred.make<{ readonly title: string }, never>(),
+    );
+    harness.generateThreadTitle.mockReturnValue(Deferred.await(generatedTitle));
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-thread-title-agent-seed"),
+        threadId: ThreadId.make("thread-1"),
+        title: seededTitle,
+      }),
+    );
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-title-agent"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-title-agent"),
+          role: "user",
+          text: "/start OCT-658",
+          attachments: [],
+        },
+        titleSeed: seededTitle,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+
+    // What the `thread_set_title` MCP tool dispatches once the agent has read
+    // the ticket: a plain meta update, with no seed and no guard of its own.
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-thread-title-agent-tool"),
+        threadId: ThreadId.make("thread-1"),
+        title: "Fix the OCT-658 checkout regression",
+      }),
+    );
+    await harness.runEffect(
+      Deferred.succeed(generatedTitle, { title: "Generated title should not win" }),
+    );
+    await harness.drain();
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.title).toBe("Fix the OCT-658 checkout regression");
+  });
+
   it("regenerates a thread title from the current conversation", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

@@ -64,6 +64,14 @@ and copying a thread reference. A copied reference uses the thread's pull reques
 link when available, otherwise its thread ID. See [keybindings](./keybindings.md)
 for custom configuration.
 
+To generate a fresh title from the conversation, open a thread's context menu and choose
+**Regenerate title**. While T3 Code is generating it, the action reads **Regenerating…** and cannot
+be selected again. The option is hidden when the connected environment needs a server update.
+
+An agent can also rename the thread it is working in, which is useful when you started the thread
+from a short command and the agent then found out what the work actually is. Renaming the thread
+yourself, or choosing **Regenerate title**, replaces whatever the agent set.
+
 ## Inspect agent work
 
 On web and desktop, use **Agents** to follow work delegated to subagents.

@@ -1,6 +1,8 @@
 import { TextGenerationError } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
+import { DEFAULT_THREAD_TITLE } from "../orchestration/threadTitles.ts";
+
 const isTextGenerationError = Schema.is(TextGenerationError);
 
 /** Convert an Effect Schema to a flat JSON Schema object, inlining `$defs` when present. */
@@ -42,8 +44,15 @@ export function sanitizePrTitle(raw: string): string {
   return "Update project changes";
 }
 
-/** Normalise a raw thread title to a compact single-line sidebar-safe label. */
-export function sanitizeThreadTitle(raw: string): string {
+/**
+ * Normalise a raw thread title to a compact single-line sidebar-safe label, or
+ * `undefined` when nothing survives normalisation.
+ *
+ * Callers that must produce a title use {@link sanitizeThreadTitle}; callers
+ * that would rather reject an unusable one read the `undefined` directly, which
+ * they cannot do from the placeholder — a user may legitimately ask for it.
+ */
+export function normalizeThreadTitle(raw: string): string | undefined {
   const normalized = raw
     .trim()
     .split(/\r?\n/g)[0]
@@ -53,7 +62,7 @@ export function sanitizeThreadTitle(raw: string): string {
     .replace(/\s+/g, " ");
 
   if (!normalized || normalized.trim().length === 0) {
-    return "New thread";
+    return undefined;
   }
 
   if (normalized.length <= 50) {
@@ -61,6 +70,11 @@ export function sanitizeThreadTitle(raw: string): string {
   }
 
   return `${normalized.slice(0, 47).trimEnd()}...`;
+}
+
+/** Normalise a raw thread title, falling back to the placeholder sidebar label. */
+export function sanitizeThreadTitle(raw: string): string {
+  return normalizeThreadTitle(raw) ?? DEFAULT_THREAD_TITLE;
 }
 
 /** CLI name to human-readable label, e.g. "codex" → "Codex CLI (`codex`)" */
