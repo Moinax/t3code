@@ -47,6 +47,9 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
 
     const resolved = yield* registry.resolve(token);
     expect(resolved?.threadId).toBe(threadId);
+    // The only place capabilities are granted: every toolkit gated on one is
+    // unreachable for the whole session if this set regresses.
+    expect(resolved?.capabilities).toEqual(new Set(["pull-requests", "preview", "thread"]));
 
     yield* registry.revokeThread(threadId);
     expect(yield* registry.resolve(token)).toBeUndefined();
@@ -78,9 +81,9 @@ it.effect("always grants pull-requests and gates browser and device access indep
         .resolve(issued.config.authorizationHeader.replace(/^Bearer\s+/, ""))
         .pipe(Effect.map((scope) => [...(scope?.capabilities ?? [])].sort()));
 
-    expect(yield* capabilitiesOf(withPreview)).toEqual(["preview", "pull-requests"]);
-    expect(yield* capabilitiesOf(withoutPreview)).toEqual(["pull-requests"]);
-    expect(yield* capabilitiesOf(withDevice)).toEqual(["device", "pull-requests"]);
+    expect(yield* capabilitiesOf(withPreview)).toEqual(["preview", "pull-requests", "thread"]);
+    expect(yield* capabilitiesOf(withoutPreview)).toEqual(["pull-requests", "thread"]);
+    expect(yield* capabilitiesOf(withDevice)).toEqual(["device", "pull-requests", "thread"]);
   }),
 );
 

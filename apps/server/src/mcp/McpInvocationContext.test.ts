@@ -10,29 +10,33 @@ import * as Effect from "effect/Effect";
 
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
-it.effect("reports the scoped credential context when preview capability is unavailable", () => {
-  const invocation: McpInvocationContext.McpInvocationScope = {
-    environmentId: EnvironmentId.make("environment-1"),
-    threadId: ThreadId.make("thread-1"),
-    providerSessionId: "provider-session-1",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-    capabilities: new Set(),
-    issuedAt: 1,
-  };
+const invocation = (
+  capabilities: ReadonlySet<McpInvocationContext.McpCapability>,
+): McpInvocationContext.McpInvocationScope => ({
+  environmentId: EnvironmentId.make("environment-1"),
+  threadId: ThreadId.make("thread-1"),
+  providerSessionId: "provider-session-1",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  capabilities,
+  issuedAt: 1,
+});
+
+it.effect("reports the scoped credential context when a capability is unavailable", () => {
+  const scope = invocation(new Set());
 
   return Effect.gen(function* () {
     const error = yield* McpInvocationContext.requireMcpCapability("preview").pipe(
-      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+      Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
       Effect.flip,
     );
 
     expect(error).toBeInstanceOf(PreviewAutomationUnavailableError);
     expect(error).toMatchObject({
       capability: "preview",
-      environmentId: invocation.environmentId,
-      threadId: invocation.threadId,
-      providerSessionId: invocation.providerSessionId,
-      providerInstanceId: invocation.providerInstanceId,
+      environmentId: scope.environmentId,
+      threadId: scope.threadId,
+      providerSessionId: scope.providerSessionId,
+      providerInstanceId: scope.providerInstanceId,
     });
     expect(error.message).toBe("MCP credential does not grant the preview capability.");
   });
@@ -61,5 +65,20 @@ it.effect("reports other missing capabilities with the neutral error", () => {
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
     );
     expect(scope).toBe(invocation);
+  });
+});
+
+it.effect("names the capability the tool asked for", () => {
+  const scope = invocation(new Set(["preview"]));
+
+  return Effect.gen(function* () {
+    const error = yield* McpInvocationContext.requireMcpCapability("thread").pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+      Effect.flip,
+    );
+
+    expect(error).toBeInstanceOf(McpCapabilityUnavailableError);
+    expect(error.capability).toBe("thread");
+    expect(error.message).toBe("MCP credential does not grant the thread capability.");
   });
 });
