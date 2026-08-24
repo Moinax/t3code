@@ -60,6 +60,10 @@ export function parseChangeRequestUrl(targetUrl: string): ChangeRequestLink | nu
     const match = /^\/([^/]+\/[^/]+)\/pull-requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
     return claim(host, match);
   }
+  // Forgejo, Gitea, and Codeberg: /{owner}/{repo}/pulls/{n}. The route is specific enough to
+  // recognize self-hosted instances without relying on an administrator-chosen hostname.
+  const forgejo = /^\/([^/]+\/[^/]+)\/pulls\/(\d+)(?:\/|$)/u.exec(url.pathname);
+  if (forgejo) return claim(host, forgejo);
   // Azure DevOps, both the current host and the per-organisation one it replaced. `_git` is part
   // of the repository path there, as it is in the remote URL the identity is read from.
   if (isHostOf(host, "dev.azure.com") || host.endsWith(".visualstudio.com")) {
@@ -91,6 +95,8 @@ export function changeRequestUrlFor(
       return `https://${host}/${repository}/-/merge_requests/${number}`;
     case "bitbucket":
       return `https://${host}/${repository}/pull-requests/${number}`;
+    case "forgejo":
+      return `https://${host}/${repository}/pulls/${number}`;
     case "azure-devops":
       return `https://${canonicalRepositoryKey(`${host}/${repository}`.toLowerCase())}/pullrequest/${number}`;
     default:
@@ -185,7 +191,7 @@ export function changeRequestRepositoryUrl(targetUrl: string): string | null {
   const url = new URL(targetUrl);
   const repositoryPath =
     /^(.*?)\/-\/merge_requests\/\d+(?:\/|$)/iu.exec(url.pathname)?.[1] ??
-    /^(.*?)(?:\/pull\/\d+|\/-\/merge_requests\/\d+|\/pull-requests\/\d+|\/pullrequest\/\d+)(?:\/|$)/iu.exec(
+    /^(.*?)(?:\/pull\/\d+|\/-\/merge_requests\/\d+|\/pull-requests\/\d+|\/pulls\/\d+|\/pullrequest\/\d+)(?:\/|$)/iu.exec(
       url.pathname,
     )?.[1];
   if (!repositoryPath) return null;
@@ -199,7 +205,7 @@ export function siblingPullRequestUrl(url: string, number: number): string | nul
   const reference = parseChangeRequestUrl(url);
   if (reference === null || !Number.isSafeInteger(number) || number < 1) return null;
   const sibling = new URL(url);
-  const route = /^\/(-\/merge_requests|pull|pull-requests|pullrequest)\/\d+(?:\/|$)/u.exec(
+  const route = /^\/(-\/merge_requests|pull|pull-requests|pulls|pullrequest)\/\d+(?:\/|$)/u.exec(
     sibling.pathname.slice(reference.repository.length + 1),
   )?.[1];
   if (route === undefined) return null;

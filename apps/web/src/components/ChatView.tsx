@@ -70,6 +70,7 @@ import {
 } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
+import { canOpenPullRequestInPanel } from "../lib/openPullRequestLink";
 import {
   getTerminalLabel,
   nextTerminalId,
@@ -4227,6 +4228,16 @@ export default function ChatView(props: ChatViewProps) {
         linkedThreadPullRequest.number,
       ])
     : null;
+  const linkedThreadPullRequestPanelAvailable = canOpenPullRequestInPanel({
+    provider: activeProject?.repositoryIdentity?.provider,
+    url: linkedThreadPullRequest?.url,
+  });
+  const projectPullRequestPanelAvailable = canOpenPullRequestInPanel({
+    provider:
+      gitStatusQuery.data?.sourceControlProvider?.kind ??
+      activeProject?.repositoryIdentity?.provider,
+    url: gitStatusQuery.data?.pr?.url,
+  });
   const observedThreadPullRequestRef = useRef<{
     readonly threadKey: string;
     readonly reference: ThreadLinkedPullRequest | null;
@@ -4235,6 +4246,7 @@ export default function ChatView(props: ChatViewProps) {
     (number: number) => {
       if (
         !supportsPullRequests ||
+        !projectPullRequestPanelAvailable ||
         !activeThreadRef ||
         !activeProject ||
         activeProjectRepository === null
@@ -4247,7 +4259,13 @@ export default function ChatView(props: ChatViewProps) {
         number,
       });
     },
-    [activeProject, activeProjectRepository, activeThreadRef, supportsPullRequests],
+    [
+      activeProject,
+      activeProjectRepository,
+      activeThreadRef,
+      projectPullRequestPanelAvailable,
+      supportsPullRequests,
+    ],
   );
   const proactivePanelObservationRef = useRef<ReturnType<
     typeof observeProactivePanelUserChoice
@@ -4286,7 +4304,11 @@ export default function ChatView(props: ChatViewProps) {
       );
     // Following the selected linked PR does not open an unrelated panel, so it
     // remains available with proactive panels off. It still respects a later choice.
-    if (followSelectedPullRequest && linkedThreadPullRequest !== null) {
+    if (
+      followSelectedPullRequest &&
+      linkedThreadPullRequestPanelAvailable &&
+      linkedThreadPullRequest !== null
+    ) {
       panels.openProactive(
         activeThreadRef,
         pullRequestSurface(linkedThreadPullRequest),
@@ -4331,6 +4353,7 @@ export default function ChatView(props: ChatViewProps) {
       eligibleLink &&
       pullRequestsCapabilityKnown &&
       supportsPullRequests &&
+      linkedThreadPullRequestPanelAvailable &&
       linkedThreadPullRequest !== null
     ) {
       panels.openProactive(
@@ -4358,6 +4381,7 @@ export default function ChatView(props: ChatViewProps) {
     latestTurnSettled,
     linkedThreadPullRequest,
     linkedThreadPullRequestKey,
+    linkedThreadPullRequestPanelAvailable,
     onDiffPanelOpen,
     pullRequestsCapabilityKnown,
     settings.proactivePanelsEnabled,
@@ -5503,11 +5527,24 @@ export default function ChatView(props: ChatViewProps) {
     );
   }, [activeThreadReferenceCopyTarget]);
   const addPullRequestSurface = useCallback(() => {
-    if (!supportsPullRequests || activeThreadRef === null || linkedThreadPullRequest === null)
+    if (
+      !supportsPullRequests ||
+      !linkedThreadPullRequestPanelAvailable ||
+      activeThreadRef === null ||
+      linkedThreadPullRequest === null
+    )
       return;
     useRightPanelStore.getState().openPullRequest(activeThreadRef, linkedThreadPullRequest);
-  }, [activeThreadRef, linkedThreadPullRequest, supportsPullRequests]);
-  const pullRequestSurfaceAvailable = supportsPullRequests && linkedThreadPullRequest !== null;
+  }, [
+    activeThreadRef,
+    linkedThreadPullRequest,
+    linkedThreadPullRequestPanelAvailable,
+    supportsPullRequests,
+  ]);
+  const pullRequestSurfaceAvailable =
+    supportsPullRequests &&
+    linkedThreadPullRequestPanelAvailable &&
+    linkedThreadPullRequest !== null;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const supportsPinning = serverConfig?.environment.capabilities.threadPinning === true;
@@ -8300,9 +8337,11 @@ export default function ChatView(props: ChatViewProps) {
           ) : null}
           {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
           <ChatHeader
-            {...(!supportsPullRequests || activeProjectRepository === null
-              ? {}
-              : { onOpenPullRequest: openProjectPullRequest })}
+            {...(supportsPullRequests &&
+            projectPullRequestPanelAvailable &&
+            activeProjectRepository !== null
+              ? { onOpenPullRequest: openProjectPullRequest }
+              : {})}
             activeThreadEnvironmentId={activeThread.environmentId}
             activeThreadId={activeThread.id}
             {...(routeKind === "draft" && draftId ? { draftId } : {})}

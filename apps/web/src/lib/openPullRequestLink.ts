@@ -26,6 +26,20 @@ export {
   changeRequestRepositoryUrl,
 } from "@t3tools/shared/changeRequestUrl";
 
+/** Forgejo change requests stay on the host until the pull request panel has a provider. */
+export function canOpenPullRequestInPanel(input: {
+  readonly provider?: SourceControlProviderKind | string | null | undefined;
+  readonly url?: string | null | undefined;
+}): boolean {
+  if (input.provider === "forgejo") return false;
+  if (input.url === null || input.url === undefined) return true;
+  try {
+    return !/^\/[^/]+\/[^/]+\/pulls\/\d+(?:\/|$)/u.test(new URL(input.url).pathname);
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Returns a click handler that opens a pull request URL in the system browser.
  *
@@ -104,10 +118,10 @@ export function findProjectOnChangeRequestHost(
  * lookalike hostname matches no project and stays a link, and the page is handed the project
  * rather than a host to narrow its whole list by.
  *
- * Given a thread, the link opens beside it in the right panel instead of taking the whole app to
- * the pull requests page: a reader following a link the agent wrote is reading the thread, and
- * should still be reading it afterwards. Any change request opens there, not only the thread's
- * own, since the panel is told which one to show.
+ * Given a thread, a supported link opens beside it in the right panel instead of taking the whole
+ * app to the pull requests page: a reader following a link the agent wrote is reading the thread,
+ * and should still be reading it afterwards. Forgejo stays an ordinary browser link until that
+ * panel has a Forgejo provider.
  */
 export function shouldOpenPullRequestExternally(
   event: Pick<MouseEvent<HTMLElement>, "metaKey" | "ctrlKey">,
@@ -171,7 +185,16 @@ export function useOpenChangeRequestLink(
               parsed,
             )
           : undefined);
-      if (project === undefined || !reads(project.environmentId)) return false;
+      if (
+        project === undefined ||
+        !reads(project.environmentId) ||
+        !canOpenPullRequestInPanel({
+          provider: project.repositoryIdentity?.provider,
+          url: targetUrl,
+        })
+      ) {
+        return false;
+      }
       const repository =
         serverConfigs.get(project.environmentId)?.environment.capabilities.threadPullRequests ===
         true

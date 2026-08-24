@@ -11,6 +11,8 @@ import {
   buildAddProjectRemoteSourceReadiness,
   buildProjectCreateCommand,
   canCreateProjectInEnvironment,
+  addProjectRemoteSourceLabel,
+  addProjectRemoteSourcePathHint,
   findExistingAddProject,
   getAddProjectInitialQuery,
   getCloneDestinationBrowsePath,
@@ -207,6 +209,20 @@ describe("add project shared logic", () => {
             detail: Option.some("Run glab auth login"),
           },
         },
+        {
+          kind: "forgejo",
+          label: "Forgejo",
+          status: "available",
+          installHint: "Install fj",
+          version: Option.some("1.2.0"),
+          detail: Option.none(),
+          auth: {
+            status: "authenticated",
+            account: Option.some("forge-user"),
+            host: Option.some("forge.example"),
+            detail: Option.none(),
+          },
+        },
       ],
     };
 
@@ -214,7 +230,13 @@ describe("add project shared logic", () => {
     expect(readiness.url.ready).toBe(true);
     expect(readiness.github.ready).toBe(true);
     expect(readiness.gitlab).toEqual({ ready: false, hint: "Run glab auth login" });
-    expect(sortAddProjectProviderSources(readiness)[0]).toBe("github");
+    expect(readiness.forgejo).toEqual({ ready: true, hint: null });
+    expect(sortAddProjectProviderSources(readiness).slice(0, 2)).toEqual(["forgejo", "github"]);
+  });
+
+  it("presents Forgejo as a first-class Add Project source", () => {
+    expect(addProjectRemoteSourceLabel("forgejo")).toBe("Forgejo");
+    expect(addProjectRemoteSourcePathHint("forgejo")).toBe("host/owner/repo");
   });
 
   it("finds existing projects by normalized path in the target environment", () => {

@@ -44,6 +44,50 @@ export T3CODE_BITBUCKET_API_TOKEN="your-token"
 The access token takes precedence if both are configured. Restart the server after changing these
 variables.
 
+### Forgejo or Gitea
+
+Forgejo and Gitea have no single public host — most instances are self-hosted. T3 Code recognizes Codeberg, gitea.com, and any host whose name includes `forgejo`, `gitea`, or `codeberg`. Other hosts are detected after you log in with the Forgejo CLI.
+
+1. Install the Forgejo CLI (`fj`) from [forgejo-cli](https://codeberg.org/forgejo-contrib/forgejo-cli)
+2. Sign in to each instance:
+   ```bash
+   fj auth login git.example.org
+   ```
+3. Open **Settings → Source Control** in T3 Code and verify Forgejo shows as authenticated
+
+If `fj auth login` reports that your instance does not have a built-in OAuth configuration, use a
+personal access token instead:
+
+1. Open `https://<host>/user/settings/applications` in your browser
+2. Create a token named `fj`. You can limit it to the repositories you use; grant repository and
+   issue/pull-request read and write access for the supported T3 Code operations
+3. Add it interactively so the token does not enter your shell history:
+   ```bash
+   fj -H <host> auth add-token
+   ```
+4. Paste the token when prompted, then verify the login:
+   ```bash
+   fj auth list
+   fj -H <host> whoami
+   ```
+
+To use SSH by default for Git operations, enable it for the instance and test the SSH user shown by
+the instance's clone URLs:
+
+```bash
+fj -H <host> auth use-ssh true
+ssh -T <ssh-user>@<host>
+```
+
+The token authenticates Forgejo API calls made through `fj` and T3 Code. Your SSH key remains the
+credential used by `git clone`, `pull`, and `push`. See the
+[Forgejo CLI authentication guide](https://codeberg.org/forgejo-contrib/forgejo-cli/wiki/Authentication)
+for additional login methods.
+
+You can then clone with `host/owner/repo` (or `owner/repo` when only one instance is logged in) and create or check out pull requests from the Git toolbar. For a local instance that uses plain HTTP or a custom port, enter its full clone URL, such as `http://forge.lan:3000/owner/repo.git`, so T3 Code preserves that connection scheme. The dedicated Pull requests inbox and right-hand review panel do not support Forgejo or Gitea yet. Pull request links and **View PR** open the host's page in your browser.
+
+The **Publish Repository** picker is also still GitHub, GitLab, Bitbucket, and Azure DevOps only. Clone an existing Forgejo or Gitea repo, or paste a Git URL.
+
 ### Azure DevOps
 
 Install [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/), add the DevOps extension, and sign in:

@@ -4,12 +4,19 @@ import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-r
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  addProjectRemoteSourceLabel as remoteProjectSourceLabel,
+  addProjectRemoteSourcePathHint as remoteProjectSourcePathHint,
+  addProjectRemoteSourceProvider as remoteProjectSourceProvider,
   canCreateProjectInEnvironment,
   getCloneDestinationBrowsePath,
   getCloneDestinationPath,
   getCloneDirectoryName,
   getDefaultCloneUrl,
   normalizePastedCloneUrl,
+  type AddProjectCloneFlow,
+  type AddProjectRemoteProviderKind,
+  type AddProjectRemoteSource,
+  type AddProjectRemoteSourceReadiness,
 } from "@t3tools/client-runtime/operations/projects";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
@@ -32,8 +39,6 @@ import {
   type FilesystemBrowseResult,
   type ProjectId,
   type SourceControlDiscoveryResult,
-  type SourceControlProviderKind,
-  type SourceControlRepositoryInfo,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -148,7 +153,7 @@ import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sideb
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
-import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
+import { AzureDevOpsIcon, BitbucketIcon, ForgejoIcon, GitHubIcon, GitLabIcon } from "./Icons";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
@@ -208,76 +213,21 @@ interface AddProjectEnvironmentOption {
   readonly status: string;
 }
 
-type AddProjectRemoteProviderKind = Extract<
-  SourceControlProviderKind,
-  "github" | "gitlab" | "bitbucket" | "azure-devops"
->;
-type AddProjectRemoteSource = AddProjectRemoteProviderKind | "url";
-
-type AddProjectCloneFlow =
-  | {
-      readonly step: "repository";
-      readonly environmentId: EnvironmentId;
-      readonly source: AddProjectRemoteSource;
-    }
-  | {
-      readonly step: "confirm";
-      readonly environmentId: EnvironmentId;
-      readonly source: AddProjectRemoteSource;
-      readonly repositoryInput: string;
-      readonly repository: SourceControlRepositoryInfo | null;
-      readonly remoteUrl: string;
-    };
-
 const REMOTE_PROJECT_SOURCES: ReadonlyArray<AddProjectRemoteSource> = [
   "url",
   "github",
   "gitlab",
   "bitbucket",
   "azure-devops",
+  "forgejo",
 ];
 const REMOTE_PROJECT_PROVIDER_SOURCES: ReadonlyArray<AddProjectRemoteProviderKind> = [
   "github",
   "gitlab",
   "bitbucket",
   "azure-devops",
+  "forgejo",
 ];
-
-function remoteProjectSourceLabel(source: AddProjectRemoteSource): string {
-  switch (source) {
-    case "github":
-      return "GitHub";
-    case "gitlab":
-      return "GitLab";
-    case "bitbucket":
-      return "Bitbucket";
-    case "azure-devops":
-      return "Azure DevOps";
-    case "url":
-      return "Git URL";
-  }
-}
-
-function remoteProjectSourcePathHint(source: AddProjectRemoteSource): string {
-  switch (source) {
-    case "github":
-      return "owner/repo";
-    case "gitlab":
-      return "group/project";
-    case "bitbucket":
-      return "workspace/repository";
-    case "azure-devops":
-      return "project/repository";
-    case "url":
-      return "URL";
-  }
-}
-
-function remoteProjectSourceProvider(
-  source: AddProjectRemoteSource,
-): AddProjectRemoteProviderKind | null {
-  return source === "url" ? null : source;
-}
 
 function remoteProjectSourceIcon(source: AddProjectRemoteSource, className: string): ReactNode {
   switch (source) {
@@ -289,6 +239,8 @@ function remoteProjectSourceIcon(source: AddProjectRemoteSource, className: stri
       return <BitbucketIcon className={className} />;
     case "azure-devops":
       return <AzureDevOpsIcon className={className} />;
+    case "forgejo":
+      return <ForgejoIcon className={className} />;
     case "url":
       return <LinkIcon className={className} />;
   }
@@ -301,10 +253,6 @@ function remoteProjectInputPlaceholder(flow: AddProjectCloneFlow | null): string
     return "Enter Git clone URL";
   }
   return `Enter ${remoteProjectSourceLabel(flow.source)} repository (${remoteProjectSourcePathHint(flow.source)})`;
-}
-
-function sourceProviderKind(source: AddProjectRemoteSource): AddProjectRemoteProviderKind | null {
-  return source === "url" ? null : source;
 }
 
 function sortAddProjectProviderSources(
@@ -320,11 +268,6 @@ function sortAddProjectProviderSources(
   });
 }
 
-type AddProjectRemoteSourceReadiness = Record<
-  AddProjectRemoteSource,
-  { readonly ready: boolean; readonly hint: string | null }
->;
-
 function buildAddProjectRemoteSourceReadiness(
   discovery: SourceControlDiscoveryResult | null,
 ): AddProjectRemoteSourceReadiness {
@@ -338,6 +281,7 @@ function buildAddProjectRemoteSourceReadiness(
     gitlab: unavailable,
     bitbucket: unavailable,
     "azure-devops": unavailable,
+    forgejo: unavailable,
   };
 
   if (!discovery) {
@@ -350,7 +294,7 @@ function buildAddProjectRemoteSourceReadiness(
   const readiness = { ...defaultReadiness };
 
   for (const source of REMOTE_PROJECT_SOURCES) {
-    const kind = sourceProviderKind(source);
+    const kind = remoteProjectSourceProvider(source);
     if (!kind) continue;
     const provider = providerByKind.get(kind);
     if (!provider) {

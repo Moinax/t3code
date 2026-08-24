@@ -1487,7 +1487,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   );
 
   // Stacks show their layer count; multiple unrelated links show their total count.
-  // Plain clicks open T3; individual PR links also support opening the host in a new tab.
+  // Plain clicks open T3 when the panel supports the host; individual PR links can also open the
+  // host in a new tab.
   const prBadgeShape = supportsMultiplePullRequests
     ? resolveThreadPullRequestBadge(thread.pullRequests)
     : null;
