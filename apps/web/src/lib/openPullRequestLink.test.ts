@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  canOpenPullRequestInPanel,
   changeRequestRepositoryUrl,
   findProjectForChangeRequest,
   gitHubPullRequestBrowserUrl,
@@ -127,6 +128,12 @@ describe("changeRequestRepositoryUrl", () => {
       ),
     ).toBe("https://gitlab.example.test/group/pull/123/repo");
   });
+
+  it("extracts a Forgejo repository URL from a pull request", () => {
+    expect(
+      changeRequestRepositoryUrl("https://git.example.test/Team/Repo/pulls/42/files#diff-1"),
+    ).toBe("https://git.example.test/Team/Repo");
+  });
 });
 
 describe("pullRequestCandidateUrlFromReferenceAutolink", () => {
@@ -193,6 +200,33 @@ describe("shouldOpenPullRequestExternally", () => {
   });
 });
 
+describe("canOpenPullRequestInPanel", () => {
+  it("keeps Forgejo pull requests on their host when the project identity knows the provider", () => {
+    expect(canOpenPullRequestInPanel({ provider: "forgejo" })).toBe(false);
+  });
+
+  it("recognizes a Forgejo URL when an older project identity still calls the provider unknown", () => {
+    expect(
+      canOpenPullRequestInPanel({
+        provider: "unknown",
+        url: "https://git.example.test/owner/repository/pulls/42",
+      }),
+    ).toBe(false);
+  });
+
+  it.each(["github", "gitlab", "bitbucket", "azure-devops", "unknown", undefined])(
+    "allows the existing panel behavior for %s",
+    (provider) => {
+      expect(
+        canOpenPullRequestInPanel({
+          provider,
+          url: "https://github.com/owner/repository/pull/42",
+        }),
+      ).toBe(true);
+    },
+  );
+});
+
 describe("parseChangeRequestUrl", () => {
   it("reads a GitHub pull request", () => {
     expect(parseChangeRequestUrl("https://github.com/T3Tools/T3Code/pull/123")).toEqual({
@@ -235,6 +269,19 @@ describe("parseChangeRequestUrl", () => {
       host: "bitbucket.org",
       repository: "workspace/repo",
       number: 5,
+    });
+  });
+
+  it("reads a Forgejo or Gitea pull request, including a self-hosted host", () => {
+    expect(parseChangeRequestUrl("https://codeberg.org/owner/repo/pulls/8")).toEqual({
+      host: "codeberg.org",
+      repository: "owner/repo",
+      number: 8,
+    });
+    expect(parseChangeRequestUrl("https://git.example.org/owner/repo/pulls/8")).toEqual({
+      host: "git.example.org",
+      repository: "owner/repo",
+      number: 8,
     });
   });
 

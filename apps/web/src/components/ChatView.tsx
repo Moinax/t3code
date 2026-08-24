@@ -49,6 +49,7 @@ import {
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
+import { canOpenPullRequestInPanel } from "../lib/openPullRequestLink";
 import {
   getTerminalLabel,
   nextTerminalId,
@@ -330,6 +331,7 @@ import {
 } from "./chat/ThreadErrorBanner";
 import {
   resolveDisplayedThreadPr,
+  resolveDisplayedThreadPrProvider,
   threadChangeRequestSnapshotsAtom,
   useLinkedThreadPullRequest,
 } from "./ThreadStatusIndicators";
@@ -2671,9 +2673,7 @@ export default function ChatView(props: ChatViewProps) {
   // The session row is rewritten when the compacting detail is raised, so its
   // updatedAt is when compaction started.
   const compactingSince =
-    activeThread?.session?.statusDetail === "compacting"
-      ? activeThread.session.updatedAt
-      : null;
+    activeThread?.session?.statusDetail === "compacting" ? activeThread.session.updatedAt : null;
   useEffect(() => {
     attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
   }, [attachmentPreviewHandoffByMessageId]);
@@ -3819,9 +3819,41 @@ export default function ChatView(props: ChatViewProps) {
       ])
     : null;
   const threadRepository = linkedThreadPullRequest?.repository ?? activeProjectRepository;
+  const linkedThreadPullRequestPanelAvailable = canOpenPullRequestInPanel({
+    provider:
+      persistedLinkedThreadPullRequestStatus?.sourceControlProvider.kind ??
+      activeProject?.repositoryIdentity?.provider,
+    url: linkedThreadPullRequest?.url,
+  });
+  const projectPullRequestPanelAvailable = canOpenPullRequestInPanel({
+    provider:
+      gitStatusQuery.data?.sourceControlProvider?.kind ??
+      activeProject?.repositoryIdentity?.provider,
+    url: gitStatusQuery.data?.pr?.url,
+  });
+  const displayedThreadPrInput = {
+    threadBranch: activeThread?.branch ?? null,
+    gitStatus: gitStatusQuery.data ?? null,
+    snapshot: activeThreadKey ? changeRequestSnapshotByKey.get(activeThreadKey) : undefined,
+    retainTerminalOnBranchMismatch: activeThread?.worktreePath === null,
+    linkedPullRequest: linkedThreadPullRequest,
+    linkedPullRequestStatus: persistedLinkedThreadPullRequestStatus,
+  };
+  const activeThreadPr =
+    replacementLinkedThreadPullRequest !== null
+      ? (gitStatusQuery.data?.pr ?? null)
+      : resolveDisplayedThreadPr(displayedThreadPrInput);
+  const activeThreadPrProvider =
+    replacementLinkedThreadPullRequest !== null
+      ? gitStatusQuery.data?.sourceControlProvider
+      : resolveDisplayedThreadPrProvider(displayedThreadPrInput);
+  const threadPullRequestPanelAvailable = canOpenPullRequestInPanel({
+    provider: activeThreadPrProvider?.kind ?? activeProject?.repositoryIdentity?.provider,
+    url: activeThreadPr?.url,
+  });
   const openThreadPullRequest = useCallback(
     (number: number) => {
-      if (!supportsPullRequests || !activeThreadRef) {
+      if (!supportsPullRequests || !threadPullRequestPanelAvailable || !activeThreadRef) {
         return;
       }
       const projectId = linkedThreadPullRequest?.projectId ?? activeProject?.id;
@@ -3839,6 +3871,7 @@ export default function ChatView(props: ChatViewProps) {
       activeThreadRef,
       linkedThreadPullRequest,
       supportsPullRequests,
+      threadPullRequestPanelAvailable,
     ],
   );
   useEffect(() => {
@@ -3858,6 +3891,7 @@ export default function ChatView(props: ChatViewProps) {
     );
     if (
       openSurface?.kind === "pull-request" &&
+      threadPullRequestPanelAvailable &&
       persistedLinkedThreadPullRequest !== null &&
       openSurface.projectId === persistedLinkedThreadPullRequest.projectId &&
       openSurface.repository.toLowerCase() ===
@@ -3896,12 +3930,14 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread,
     persistedLinkedThreadPullRequest,
     replacementLinkedThreadPullRequest,
+    threadPullRequestPanelAvailable,
     updateThreadMetadata,
   ]);
   const openProjectPullRequest = useCallback(
     (number: number) => {
       if (
         !supportsPullRequests ||
+        !projectPullRequestPanelAvailable ||
         !activeThreadRef ||
         !activeProject ||
         activeProjectRepository === null
@@ -3914,7 +3950,13 @@ export default function ChatView(props: ChatViewProps) {
         number,
       });
     },
-    [activeProject, activeProjectRepository, activeThreadRef, supportsPullRequests],
+    [
+      activeProject,
+      activeProjectRepository,
+      activeThreadRef,
+      projectPullRequestPanelAvailable,
+      supportsPullRequests,
+    ],
   );
   const proactiveTurnObservationRef = useRef<{
     threadKey: string;
@@ -4009,6 +4051,7 @@ export default function ChatView(props: ChatViewProps) {
       eligibleLink &&
       pullRequestsCapabilityKnown &&
       supportsPullRequests &&
+      linkedThreadPullRequestPanelAvailable &&
       linkedThreadPullRequest !== null;
     const shouldDeferLink = eligibleLink && !pullRequestsCapabilityKnown;
     proactivePullRequestObservationRef.current = {
@@ -4025,6 +4068,7 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread,
     linkedThreadPullRequest,
     linkedThreadPullRequestKey,
+    linkedThreadPullRequestPanelAvailable,
     pullRequestsCapabilityKnown,
     settings.proactivePanelsEnabled,
     shouldUseRightPanelSheet,
@@ -5039,17 +5083,6 @@ export default function ChatView(props: ChatViewProps) {
       resizeObserver.disconnect();
     };
   }, [composerOverlayElement, publishComposerOverlayHeight]);
-  const activeThreadPr =
-    replacementLinkedThreadPullRequest !== null
-      ? (gitStatusQuery.data?.pr ?? null)
-      : resolveDisplayedThreadPr({
-          threadBranch: activeThread?.branch ?? null,
-          gitStatus: gitStatusQuery.data ?? null,
-          snapshot: activeThreadKey ? changeRequestSnapshotByKey.get(activeThreadKey) : undefined,
-          retainTerminalOnBranchMismatch: activeThread?.worktreePath === null,
-          linkedPullRequest: linkedThreadPullRequest,
-          linkedPullRequestStatus: persistedLinkedThreadPullRequestStatus,
-        });
   const handlePullRequestTabStatusChange = useCallback(
     (status: Pick<PullRequestTabStatus, "repository" | "number" | "state">) => {
       if (
@@ -5133,7 +5166,10 @@ export default function ChatView(props: ChatViewProps) {
     openThreadPullRequest(activeThreadPr.number);
   }, [activeThreadPr, openThreadPullRequest]);
   const pullRequestSurfaceAvailable =
-    supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
+    supportsPullRequests &&
+    threadPullRequestPanelAvailable &&
+    activeThreadPr !== null &&
+    threadRepository !== null;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const supportsPinning = serverConfig?.environment.capabilities.threadPinning === true;
@@ -7730,9 +7766,11 @@ export default function ChatView(props: ChatViewProps) {
           ) : null}
           {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
           <ChatHeader
-            {...(!supportsPullRequests || activeProjectRepository === null
-              ? {}
-              : { onOpenPullRequest: openProjectPullRequest })}
+            {...(supportsPullRequests &&
+            projectPullRequestPanelAvailable &&
+            activeProjectRepository !== null
+              ? { onOpenPullRequest: openProjectPullRequest }
+              : {})}
             activeThreadEnvironmentId={activeThread.environmentId}
             activeThreadId={activeThread.id}
             {...(routeKind === "draft" && draftId ? { draftId } : {})}

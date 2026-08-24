@@ -1246,8 +1246,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     </span>
   );
 
-  // A real link so cmd/ctrl+click and middle-click open the host in the
-  // browser. A plain click still opens T3's pull request view.
+  // A real link so cmd/ctrl+click and middle-click open the host in the browser. A plain click
+  // opens T3's pull request view when that view supports the host, and otherwise follows the link.
   const prBadge =
     prStatus && pr ? (
       <a

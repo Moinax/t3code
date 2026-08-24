@@ -67,6 +67,20 @@ export interface ChangeRequestLink {
   readonly number: number;
 }
 
+/** Forgejo change requests stay on the host until the pull request panel has a provider. */
+export function canOpenPullRequestInPanel(input: {
+  readonly provider?: SourceControlProviderKind | string | null | undefined;
+  readonly url?: string | null | undefined;
+}): boolean {
+  if (input.provider === "forgejo") return false;
+  if (input.url === null || input.url === undefined) return true;
+  try {
+    return !/^\/[^/]+\/[^/]+\/pulls\/\d+(?:\/|$)/u.test(new URL(input.url).pathname);
+  } catch {
+    return true;
+  }
+}
+
 /** The host itself, one of its subdomains, or an install named after the provider. */
 function isHostOf(hostname: string, apex: string, label?: string): boolean {
   if (hostname === apex || hostname.endsWith(`.${apex}`)) return true;
@@ -114,6 +128,10 @@ export function parseChangeRequestUrl(targetUrl: string): ChangeRequestLink | nu
     const match = /^\/([^/]+\/[^/]+)\/pull-requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
     return claim(host, match);
   }
+  // Forgejo / Gitea / Codeberg: /{owner}/{repo}/pulls/{n}. The `/pulls/` segment is
+  // their own (GitHub uses `/pull/`), so a self-hosted instance can keep any hostname.
+  const forgejo = /^\/([^/]+\/[^/]+)\/pulls\/(\d+)(?:\/|$)/u.exec(url.pathname);
+  if (forgejo) return claim(host, forgejo);
   // Azure DevOps, both the current host and the per-organisation one it replaced. `_git` is part
   // of the repository path there, as it is in the remote URL the identity is read from.
   if (isHostOf(host, "dev.azure.com") || host.endsWith(".visualstudio.com")) {
@@ -170,7 +188,7 @@ export function changeRequestRepositoryUrl(targetUrl: string): string | null {
   const url = new URL(targetUrl);
   const repositoryPath =
     /^(.*?)\/-\/merge_requests\/\d+(?:\/|$)/iu.exec(url.pathname)?.[1] ??
-    /^(.*?)(?:\/pull\/\d+|\/-\/merge_requests\/\d+|\/pull-requests\/\d+|\/pullrequest\/\d+)(?:\/|$)/iu.exec(
+    /^(.*?)(?:\/pull\/\d+|\/-\/merge_requests\/\d+|\/pull-requests\/\d+|\/pulls\/\d+|\/pullrequest\/\d+)(?:\/|$)/iu.exec(
       url.pathname,
     )?.[1];
   if (!repositoryPath) return null;
@@ -230,10 +248,10 @@ export function findProjectForChangeRequest(
  * lookalike hostname matches no project and stays a link, and the page is handed the project
  * rather than a host to narrow its whole list by.
  *
- * Given a thread, the link opens beside it in the right panel instead of taking the whole app to
- * the pull requests page: a reader following a link the agent wrote is reading the thread, and
- * should still be reading it afterwards. Any change request opens there, not only the thread's
- * own, since the panel is told which one to show.
+ * Given a thread, a supported link opens beside it in the right panel instead of taking the whole
+ * app to the pull requests page: a reader following a link the agent wrote is reading the thread,
+ * and should still be reading it afterwards. Forgejo stays an ordinary browser link until that
+ * panel has a Forgejo provider.
  */
 export function shouldOpenPullRequestExternally(
   event: Pick<MouseEvent<HTMLElement>, "metaKey" | "ctrlKey">,
@@ -283,7 +301,16 @@ export function useOpenChangeRequestLink(
                   Number(left.environmentId === primaryEnvironmentId),
               );
       const project = findProjectForChangeRequest(projects, parsed);
-      if (project === undefined || !reads(project.environmentId)) return false;
+      if (
+        project === undefined ||
+        !reads(project.environmentId) ||
+        !canOpenPullRequestInPanel({
+          provider: project.repositoryIdentity?.provider,
+          url: targetUrl,
+        })
+      ) {
+        return false;
+      }
       event.preventDefault();
       event.stopPropagation();
       if (resolvedThreadRef) {

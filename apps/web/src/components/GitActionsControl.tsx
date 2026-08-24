@@ -99,7 +99,7 @@ import { resolvePathLinkTarget } from "~/terminal-links";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { useOpenLink } from "~/browser/useOpenLink";
-import { useOpenPrLink } from "~/lib/openPullRequestLink";
+import { canOpenPullRequestInPanel, useOpenPrLink } from "~/lib/openPullRequestLink";
 
 interface GitActionsControlProps {
   gitCwd: string | null;
@@ -1232,7 +1232,14 @@ export default function GitActionsControl({
     const openPr = gitStatusForActions?.pr?.state === "open" ? gitStatusForActions.pr : null;
     // Beside the thread where it was made, the way the browser opens beside it. Checked before
     // the shell, which opening in the app does not need.
-    if (openPr && onOpenPullRequest) {
+    if (
+      openPr &&
+      onOpenPullRequest &&
+      canOpenPullRequestInPanel({
+        provider: gitStatusForActions?.sourceControlProvider?.kind,
+        url: openPr.url,
+      })
+    ) {
       onOpenPullRequest(openPr.number);
       return;
     }

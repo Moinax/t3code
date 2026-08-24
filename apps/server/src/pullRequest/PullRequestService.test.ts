@@ -724,6 +724,38 @@ it.effect("lists every host that has an implementation", () =>
   }),
 );
 
+it.effect("reports Forgejo as unsupported without trying to read its pull requests", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "forgejo",
+          title: "on Codeberg",
+          workspaceRoot: "/forgejo",
+          repository: "owner/repo",
+          provider: "forgejo",
+          host: "codeberg.org",
+        }),
+      ],
+      providers: [],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(result.entries, []);
+    assert.deepStrictEqual(result.providers, [
+      {
+        host: "codeberg.org",
+        kind: "forgejo",
+        searchesOnHost: false,
+        projectCount: 1,
+        configured: false,
+        detail: "This host cannot be browsed here yet.",
+      },
+    ]);
+  }),
+);
+
 it.effect("narrows the listing to one host when asked", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
