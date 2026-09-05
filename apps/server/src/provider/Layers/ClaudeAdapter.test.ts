@@ -70,6 +70,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setModelCalls: Array<string | undefined> = [];
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
+  public onNext: (() => void) | undefined;
   public closeCalls = 0;
   public closeError: unknown | undefined;
 
@@ -130,6 +131,9 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   [Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
     return {
       next: () => {
+        const onNext = this.onNext;
+        this.onNext = undefined;
+        onNext?.();
         if (this.queue.length > 0) {
           const value = this.queue.shift();
           if (value) {
@@ -3283,11 +3287,6 @@ describe("ClaudeAdapterLive", () => {
       const adapter = yield* ClaudeAdapter;
       const firstTurnSettled = yield* Deferred.make<void>();
       const completedFiber = yield* adapter.streamEvents.pipe(
-        Stream.tap((event) =>
-          event.type === "session.state.changed" && event.payload.reason === "api_retry:1/2"
-            ? Deferred.succeed(firstTurnSettled, undefined).pipe(Effect.asVoid)
-            : Effect.void,
-        ),
         Stream.filter((event) => event.type === "turn.completed"),
         Stream.take(2),
         Stream.runCollect,
@@ -3304,6 +3303,10 @@ describe("ClaudeAdapterLive", () => {
         input: "first turn",
         attachments: [],
       });
+      // The SDK reader asks for its next message after settling the previous turn.
+      harness.query.onNext = () => {
+        Deferred.doneUnsafe(firstTurnSettled, Effect.void);
+      };
       harness.query.emit({
         type: "result",
         subtype: "success",
@@ -3332,17 +3335,6 @@ describe("ClaudeAdapterLive", () => {
             maxOutputTokens: 64_000,
           },
         },
-      } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "system",
-        subtype: "api_retry",
-        attempt: 1,
-        max_retries: 2,
-        retry_delay_ms: 1,
-        error_status: 502,
-        error: { type: "api_error" },
-        session_id: "sdk-session-consecutive-usage",
-        uuid: "consecutive-usage-barrier",
       } as unknown as SDKMessage);
       yield* Deferred.await(firstTurnSettled);
 
@@ -4521,7 +4513,7 @@ describe("ClaudeAdapterLive", () => {
           if (
             receipt &&
             event.type === "session.state.changed" &&
-            event.payload.reason === "api_retry:1/1"
+            event.payload.reason === "session_state:idle"
           ) {
             yield* Deferred.succeed(receipt, undefined);
           }
@@ -4529,15 +4521,11 @@ describe("ClaudeAdapterLive", () => {
       ).pipe(Effect.forkChild);
       const drainSdkMessages = Effect.gen(function* () {
         receipt = yield* Deferred.make<void>();
-        // The heartbeat follows queued SDK messages without adding a warning.
+        // An authoritative idle notice is observable even after the turn has ended.
         query.emit({
           type: "system",
-          subtype: "api_retry",
-          attempt: 1,
-          max_retries: 1,
-          retry_delay_ms: 0,
-          error_status: 429,
-          error: { type: "rate_limit_error" },
+          subtype: "session_state_changed",
+          state: "idle",
           session_id: "sdk-session-limit",
           uuid: "usage-limit-drain",
         } as unknown as SDKMessage);
