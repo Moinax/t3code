@@ -2,6 +2,7 @@ import {
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
   GitPullRequestIcon,
+  GitCommitHorizontalIcon,
   SettingsIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -10,6 +11,7 @@ import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-ro
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
+import { useForkUpdates } from "../../state/forkUpdates";
 import { useEnvironments } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
@@ -123,7 +125,12 @@ function SidebarUtilityItem({
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            <SidebarMenuButton
+              aria-label={label}
+              onClick={onClick}
+              size="icon"
+              className="relative overflow-visible"
+            >
               {icon}
             </SidebarMenuButton>
           }
@@ -131,6 +138,31 @@ function SidebarUtilityItem({
         <TooltipPopup side="top">{tooltip ?? label}</TooltipPopup>
       </Tooltip>
     </SidebarMenuItem>
+  );
+}
+
+function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
+  const { data, error, loading } = useForkUpdates();
+  const label = error
+    ? `Fork updates: check failed${data ? `, last count ${data.count}` : ""}`
+    : data
+      ? `Fork updates: ${data.count} upstream commits missing`
+      : loading
+        ? "Fork updates: checking GitHub"
+        : "Fork updates";
+  return (
+    <SidebarUtilityItem
+      label={label}
+      onClick={onClick}
+      icon={
+        <>
+          <GitCommitHorizontalIcon />
+          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-muted px-1 text-center text-[9px] font-semibold leading-4 tabular-nums text-foreground">
+            {error ? "!" : data ? (data.count > 999 ? "999+" : data.count) : "…"}
+          </span>
+        </>
+      }
+    />
   );
 }
 
@@ -146,9 +178,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           ? "project-settings"
           : location.pathname === "/usage"
             ? "usage"
-            : location.pathname === "/pull-requests"
-              ? "pull-requests"
-              : null,
+            : location.pathname === "/fork-updates"
+              ? "fork-updates"
+              : location.pathname === "/pull-requests"
+                ? "pull-requests"
+                : null,
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
@@ -220,6 +254,12 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           />
         </>
       )}
+      <ForkUpdatesUtilityItem
+        onClick={() => {
+          closeMobileSidebar();
+          void navigate({ to: "/fork-updates" });
+        }}
+      />
       <SidebarUpdatePill />
     </SidebarMenu>
   );
