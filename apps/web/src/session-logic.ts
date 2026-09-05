@@ -41,10 +41,11 @@ import {
   type TurnDiffSummary,
 } from "./types";
 import { formatContextWindowTokens } from "./lib/contextWindow";
+import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 
 export type { PendingApproval, PendingUserInput } from "@t3tools/client-runtime/pending-requests";
 
-export { formatDuration } from "@t3tools/shared/orchestrationTiming";
+export { formatDuration };
 
 export {
   workEntryDisplayIndicatesToolFailure,

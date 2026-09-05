@@ -37,6 +37,9 @@ const run = (
       Effect.provideService(McpInvocationContext.McpInvocationContext, scope(capabilities)),
       Effect.provideService(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("Unexpected replay stats request"),
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
         dispatch: (command) =>
           Ref.update(dispatched, (commands) => [...commands, command]).pipe(
             Effect.as({ sequence: 1 }),
