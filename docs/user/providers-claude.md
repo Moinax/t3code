@@ -67,7 +67,6 @@ Plugin skills carry the plugin's name, so a `tdd` skill from the `mattpocock-ski
 as `mattpocock-skills:tdd` — the same name Claude Code itself uses. A plugin you have switched off,
 or one installed for a different project, stays out of the list.
 
-
 Use `$` in the composer to select a skill. Skills marked `disable-model-invocation`
 can still be started by you. Invoke those one per message: Claude directly runs
 only the last named skill and may try to start earlier ones through its Skill

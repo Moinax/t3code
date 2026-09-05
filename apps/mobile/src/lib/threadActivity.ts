@@ -486,7 +486,9 @@ function contextCompactionMetaParts(payload: Record<string, unknown> | null): st
   const preTokens = asPositiveFinite(meta.pre_tokens);
   const postTokens = asPositiveFinite(meta.post_tokens);
   if (preTokens !== null && postTokens !== null) {
-    parts.push(`${formatCompactionTokens(preTokens)} → ${formatCompactionTokens(postTokens)} tokens`);
+    parts.push(
+      `${formatCompactionTokens(preTokens)} → ${formatCompactionTokens(postTokens)} tokens`,
+    );
   }
   const durationMs = asPositiveFinite(meta.duration_ms);
   if (durationMs !== null) {

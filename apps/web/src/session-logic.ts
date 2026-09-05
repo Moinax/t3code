@@ -36,7 +36,9 @@ import {
 } from "./types";
 import { formatContextWindowTokens } from "./lib/contextWindow";
 
-export { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+
+export { formatDuration };
 
 export type WorkLogToolLifecycleStatus =
   | "inProgress"
