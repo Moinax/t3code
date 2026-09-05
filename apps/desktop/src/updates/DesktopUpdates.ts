@@ -335,6 +335,9 @@ export const make = Effect.gen(function* () {
   );
 
   const resolveDisabledReason = Effect.gen(function* () {
+    if (/-moinax\./.test(environment.appVersion)) {
+      return Option.some("This fork is updated from Fork updates in the sidebar.");
+    }
     const hasFeedConfig = yield* hasUpdateFeedConfig;
     return Option.fromNullishOr(
       getAutoUpdateDisabledReason({

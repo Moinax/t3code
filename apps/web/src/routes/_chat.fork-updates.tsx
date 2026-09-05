@@ -1,3 +1,5 @@
+import { ForkMaintenancePanel } from "../components/ForkMaintenancePanel";
+import { useForkMaintenance } from "../state/forkMaintenance";
 import { createFileRoute } from "@tanstack/react-router";
 import { CheckIcon, ExternalLinkIcon, GitCommitHorizontalIcon, RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
@@ -55,12 +57,16 @@ function ForkUpdatesPage() {
                 variant="outline"
                 size="sm"
                 disabled={loading}
-                onClick={() => void refresh(true)}
+                onClick={() => {
+                  void refresh(true);
+                  void useForkMaintenance.getState().request("status");
+                }}
               >
                 <RefreshCwIcon /> {loading ? "Checking…" : "Refresh"}
               </Button>
             </div>
           </div>
+          <ForkMaintenancePanel />
           <div className="space-y-2" aria-live="polite">
             <p className="text-xs text-muted-foreground">
               {data ? `Last checked ${new Date(data.checkedAt).toLocaleString()}. ` : ""}

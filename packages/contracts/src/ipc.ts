@@ -1,3 +1,4 @@
+import type { ForkUpdateAction, ForkUpdateState } from "./forkUpdate.ts";
 import type {
   VcsCreateRefInput,
   VcsCreateRefResult,
@@ -1072,6 +1073,7 @@ export type DesktopDeepLinkTarget = {
 };
 
 export interface DesktopBridge {
+  forkUpdate?: (action: ForkUpdateAction) => Promise<ForkUpdateState>;
   getAppBranding: () => DesktopAppBranding | null;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;

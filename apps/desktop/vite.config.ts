@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - Embed the standalone updater before an Effect runtime exists.
+import * as NodeFS from "node:fs";
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 
@@ -44,7 +46,12 @@ export default defineConfig({
       outDir: "dist-electron",
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
-      define: publicConfigDefine,
+      define: {
+        ...publicConfigDefine,
+        __T3CODE_FORK_UPDATE_RUNNER__: JSON.stringify(
+          NodeFS.readFileSync(new URL("../../scripts/fork-update.mjs", import.meta.url), "utf8"),
+        ),
+      },
       entry: ["src/main.ts"],
       clean: true,
       deps: {
