@@ -16,6 +16,7 @@ import {
   elapsedShare,
   formatDuration,
   formatResetsIn,
+  type LimitsGroup,
   limitsNotice,
   type LimitPace,
   paceOf,
@@ -25,6 +26,7 @@ import { GaugeIcon, TrendingDownIcon, TrendingUpIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -418,6 +420,140 @@ function SourceLimits({ source, now }: { readonly source: LimitsSource; readonly
         ))
       )}
     </div>
+  );
+}
+
+interface UsageLimitsHoverWindow {
+  readonly id: string;
+  readonly label: string;
+  readonly usedPercent: number;
+  readonly resetsIn: string | null;
+}
+
+interface UsageLimitsHoverRow {
+  readonly key: string;
+  readonly driver: ServerProvider["driver"];
+  readonly driverLabel: string;
+  readonly instanceLabel: string;
+  readonly accentColor: string | undefined;
+  readonly notice: string | null;
+  readonly windows: readonly UsageLimitsHoverWindow[];
+}
+
+/**
+ * Flatten the primary environment's native-provider limits into rows that fit
+ * in the sidebar hover. Remotes, source accounts, and actions stay on the page.
+ */
+export function buildUsageLimitsHoverRows(
+  groups: readonly LimitsGroup[],
+  primaryEnvironmentId: EnvironmentId | null,
+  now: number,
+): readonly UsageLimitsHoverRow[] {
+  if (primaryEnvironmentId === null) return [];
+  return groups
+    .filter((group) => group.environmentId === primaryEnvironmentId)
+    .flatMap((group) =>
+      group.providers.flatMap((provider) => {
+        const limits = provider.usageLimits;
+        if (!limits) return [];
+        const driverLabel = getDriverOption(provider.driver)?.label ?? String(provider.driver);
+        return [
+          {
+            key: `${group.environmentId}:${provider.instanceId}`,
+            driver: provider.driver,
+            driverLabel,
+            instanceLabel: providerLimitsLabel(
+              provider,
+              (driver) => getDriverOption(driver)?.label,
+            ),
+            accentColor: provider.accentColor,
+            notice: limitsNotice(limits),
+            windows: limits.windows.map((window) => ({
+              id: window.id,
+              label: window.label,
+              usedPercent: window.usedPercent,
+              resetsIn: formatResetsIn(window, now),
+            })),
+          },
+        ];
+      }),
+    );
+}
+
+/** Compact native-provider limits, without controls that cannot be used inside a tooltip. */
+export function UsageLimitsHoverContent({
+  rows,
+}: {
+  readonly rows: readonly UsageLimitsHoverRow[];
+}) {
+  if (rows.length === 0) {
+    return <p className="px-1 py-1.5 text-xs text-muted-foreground">No limits reported.</p>;
+  }
+
+  return (
+    <div className="flex w-72 flex-col gap-3 p-1.5">
+      {rows.map((row) => (
+        <section key={row.key} className="flex min-w-0 flex-col gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <ProviderInstanceIcon
+              driverKind={row.driver}
+              displayName={row.instanceLabel}
+              accentColor={row.accentColor}
+              showBadge={Boolean(row.accentColor)}
+              indicatorBackground="var(--popover)"
+              className="size-4"
+              iconClassName="size-3.5 text-foreground/80"
+            />
+            <span className="shrink-0 font-medium text-foreground">{row.driverLabel}</span>
+            {row.instanceLabel !== row.driverLabel ? (
+              <span className="min-w-0 truncate text-muted-foreground">· {row.instanceLabel}</span>
+            ) : null}
+          </div>
+          {row.notice ? (
+            <p className="text-[11px] text-muted-foreground">{row.notice}</p>
+          ) : (
+            row.windows.map((window) => {
+              const used = Math.max(0, Math.min(100, window.usedPercent));
+              return (
+                <div key={window.id} className="flex flex-col gap-1">
+                  <div className="flex min-w-0 items-center gap-2 text-[11px]">
+                    <span className="min-w-0 truncate text-muted-foreground">{window.label}</span>
+                    <span
+                      className="ms-auto shrink-0 font-medium tabular-nums"
+                      style={{ color: barColor(row.driver) }}
+                    >
+                      {Math.round(used)}%
+                    </span>
+                    {window.resetsIn ? (
+                      <span className="w-[5.75rem] shrink-0 text-right text-[10px] text-muted-foreground tabular-nums">
+                        {window.resetsIn}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="h-1 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${used}%`, backgroundColor: barColor(row.driver) }}
+                    />
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+/** Current Codex and Claude subscription headroom on the sidebar's Usage icon. */
+export function UsageLimitsHoverCard() {
+  const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const groups = collectLimitsGroups(presentations);
+  const [now] = useState(() => Date.now());
+  return (
+    <UsageLimitsHoverContent rows={buildUsageLimitsHoverRows(groups, primaryEnvironmentId, now)} />
   );
 }
 
