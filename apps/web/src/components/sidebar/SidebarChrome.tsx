@@ -1,3 +1,5 @@
+import { isForkUpdateRunning } from "@t3tools/contracts";
+import { useForkMaintenance, useForkMaintenanceMonitor } from "../../state/forkMaintenance";
 import {
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
@@ -143,13 +145,24 @@ function SidebarUtilityItem({
 
 function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
   const { data, error, loading } = useForkUpdates();
-  const label = error
-    ? `Fork updates: check failed${data ? `, last count ${data.count}` : ""}`
-    : data
-      ? `Fork updates: ${data.count} upstream commits missing`
-      : loading
-        ? "Fork updates: checking GitHub"
-        : "Fork updates";
+  const maintenance = useForkMaintenance();
+  const job = maintenance.state;
+  const ready = job?.stage === "ready" && job.version !== job.runningVersion;
+  const running = job ? isForkUpdateRunning(job.stage) : false;
+  const failed = job?.stage === "error" || !!maintenance.error;
+  const label = ready
+    ? "Fork update ready: restart from Fork updates"
+    : running
+      ? `Fork update: ${job?.message}`
+      : failed
+        ? "Fork update needs attention"
+        : error
+          ? `Fork updates: check failed${data ? `, last count ${data.count}` : ""}`
+          : data
+            ? `Fork updates: ${data.count} upstream commits missing`
+            : loading
+              ? "Fork updates: checking GitHub"
+              : "Fork updates";
   return (
     <SidebarUtilityItem
       label={label}
@@ -157,8 +170,27 @@ function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
       icon={
         <>
           <GitCommitHorizontalIcon />
-          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-muted px-1 text-center text-[9px] font-semibold leading-4 tabular-nums text-foreground">
-            {error ? "!" : data ? (data.count > 999 ? "999+" : data.count) : "…"}
+          <span
+            className={cn(
+              "absolute -right-1 -top-1 min-w-4 rounded-full px-1 text-center text-[9px] font-semibold leading-4 tabular-nums",
+              ready
+                ? "bg-emerald-600 text-white"
+                : failed || error
+                  ? "bg-amber-500 text-black"
+                  : "bg-muted text-foreground",
+            )}
+          >
+            {ready
+              ? "✓"
+              : failed || error
+                ? "!"
+                : running
+                  ? "…"
+                  : data
+                    ? data.count > 999
+                      ? "999+"
+                      : data.count
+                    : "…"}
           </span>
         </>
       }
@@ -167,6 +199,8 @@ function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
 }
 
 export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
+  useForkMaintenanceMonitor();
+  const forkUpdateAvailable = useForkMaintenance((state) => state.state?.available);
   const navigate = useNavigate();
   const canGoBack = useCanGoBack();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -260,7 +294,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           void navigate({ to: "/fork-updates" });
         }}
       />
-      <SidebarUpdatePill />
+      {!forkUpdateAvailable && <SidebarUpdatePill />}
     </SidebarMenu>
   );
 });

@@ -19,6 +19,22 @@ import * as DesktopUpdates from "./DesktopUpdates.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 
 describe("DesktopUpdates", () => {
+  it.effect("leaves fork installations to the fork updater", () => {
+    const harness = makeHarness({ appVersion: "0.0.38-moinax.abcdef123" });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        const state = yield* updates.getState;
+        assert.equal(state.enabled, false);
+        assert.equal(state.status, "disabled");
+        yield* updates.check("web-ui");
+        assert.equal(harness.checkCount(), 0);
+        assert.equal(harness.listenerCount(), 0);
+      }),
+    ).pipe(Effect.provide(harness.layer));
+  });
+
   it("preserves complete causes for update poller and event failures", () => {
     const cause = Cause.combine(
       Cause.fail(new Error("updater failed")),
