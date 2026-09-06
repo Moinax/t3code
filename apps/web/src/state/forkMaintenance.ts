@@ -13,30 +13,41 @@ interface ForkMaintenanceStore {
   error: string | null;
   request: (action: ForkUpdateAction) => Promise<void>;
 }
-export const useForkMaintenance = create<ForkMaintenanceStore>((set, get) => ({
-  state: null,
-  pending: false,
-  error: null,
-  request: async (action) => {
-    const bridge = window.desktopBridge?.forkUpdate;
-    if (!bridge || get().pending) return;
-    set({ pending: true });
-    try {
-      const previous = get().state;
-      const state = await bridge(action);
-      set({ state, error: null });
-      if (state.stage === "ready" && state.source !== "local" && previous?.stage !== "ready") {
-        void useForkUpdatesStore.getState().refresh(true);
+export const useForkMaintenance = create<ForkMaintenanceStore>((set, get) => {
+  let latestRequest = 0;
+  let checking = false;
+  return {
+    state: null,
+    pending: false,
+    error: null,
+    request: async (action) => {
+      const bridge = window.desktopBridge?.forkUpdate;
+      const statusOnly = action === "status";
+      if (!bridge || get().pending || (statusOnly && checking)) return;
+      const requestId = ++latestRequest;
+      if (statusOnly) checking = true;
+      else set({ pending: true });
+      try {
+        const previous = get().state;
+        const state = await bridge(action);
+        // A user action takes priority over an older status request still in flight.
+        if (requestId !== latestRequest) return;
+        set({ state, error: null });
+        if (state.stage === "ready" && state.source !== "local" && previous?.stage !== "ready") {
+          void useForkUpdatesStore.getState().refresh(true);
+        }
+      } catch (error) {
+        if (requestId !== latestRequest) return;
+        set({
+          error: error instanceof Error ? error.message : "Could not contact the fork updater.",
+        });
+      } finally {
+        if (statusOnly) checking = false;
+        else set({ pending: false });
       }
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : "Could not contact the fork updater.",
-      });
-    } finally {
-      set({ pending: false });
-    }
-  },
-}));
+    },
+  };
+});
 
 /** Mounted once in the sidebar. Status survives navigation and reconnects to the local job. */
 export function useForkMaintenanceMonitor() {

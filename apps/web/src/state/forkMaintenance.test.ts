@@ -87,3 +87,71 @@ it("replaces an upstream preparation with a local build without refreshing GitHu
   expect(refresh).not.toHaveBeenCalled();
   expect(useForkMaintenance.getState().state?.source).toBe("local");
 });
+
+it("refreshes status silently and coalesces overlapping status requests", async () => {
+  let finish!: (value: ForkUpdateState) => void;
+  bridge.mockImplementation(
+    () =>
+      new Promise<ForkUpdateState>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const first = useForkMaintenance.getState().request("status");
+  expect(useForkMaintenance.getState().pending).toBe(false);
+  await useForkMaintenance.getState().request("status");
+  expect(bridge).toHaveBeenCalledTimes(1);
+  finish(state);
+  await first;
+  expect(useForkMaintenance.getState()).toMatchObject({ state, pending: false });
+});
+
+it("accepts a click during polling and keeps the action pending when the old poll finishes", async () => {
+  let finishPoll!: (value: ForkUpdateState) => void;
+  let finishAction!: (value: ForkUpdateState) => void;
+  bridge
+    .mockImplementationOnce(
+      () =>
+        new Promise<ForkUpdateState>((resolve) => {
+          finishPoll = resolve;
+        }),
+    )
+    .mockImplementationOnce(
+      () =>
+        new Promise<ForkUpdateState>((resolve) => {
+          finishAction = resolve;
+        }),
+    );
+  const poll = useForkMaintenance.getState().request("status");
+  const action = useForkMaintenance.getState().request("start-local");
+  expect(bridge).toHaveBeenLastCalledWith("start-local");
+  expect(useForkMaintenance.getState().pending).toBe(true);
+  finishPoll({ ...state, stage: "idle" });
+  await poll;
+  expect(useForkMaintenance.getState()).toMatchObject({ state: null, pending: true });
+  finishAction(state);
+  await action;
+  expect(useForkMaintenance.getState()).toMatchObject({ state, pending: false });
+});
+
+it.each([false, true])(
+  "ignores a stale poll after a user action, including failures: %s",
+  async (fail) => {
+    let resolvePoll!: (value: ForkUpdateState) => void;
+    let rejectPoll!: (error: Error) => void;
+    bridge
+      .mockImplementationOnce(
+        () =>
+          new Promise<ForkUpdateState>((resolve, reject) => {
+            resolvePoll = resolve;
+            rejectPoll = reject;
+          }),
+      )
+      .mockResolvedValueOnce(state);
+    const poll = useForkMaintenance.getState().request("status");
+    await useForkMaintenance.getState().request("start-local");
+    if (fail) rejectPoll(new Error("Old request failed"));
+    else resolvePoll({ ...state, stage: "idle" });
+    await poll;
+    expect(useForkMaintenance.getState()).toMatchObject({ state, pending: false, error: null });
+  },
+);

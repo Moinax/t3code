@@ -6,6 +6,7 @@ import {
   GitPullRequestIcon,
   GitCommitHorizontalIcon,
   SettingsIcon,
+  RefreshCwIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
@@ -36,6 +37,7 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { UsageLimitsHoverCard } from "../usage/UsageLimits";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
+import { SidebarForkUpdatePill } from "./SidebarForkUpdatePill";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 
@@ -170,29 +172,33 @@ function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       icon={
         <>
-          <GitCommitHorizontalIcon />
-          <span
-            className={cn(
-              "absolute -right-1 -top-1 min-w-4 rounded-full px-1 text-center text-[9px] font-semibold leading-4 tabular-nums",
-              ready
-                ? "bg-emerald-600 text-white"
+          {running ? (
+            <RefreshCwIcon aria-hidden="true" className="motion-safe:animate-spin" />
+          ) : (
+            <GitCommitHorizontalIcon />
+          )}
+          {!running && (
+            <span
+              className={cn(
+                "absolute -right-1 -top-1 min-w-4 rounded-full px-1 text-center text-[9px] font-semibold leading-4 tabular-nums",
+                ready
+                  ? "bg-emerald-600 text-white"
+                  : failed || error
+                    ? "bg-amber-500 text-black"
+                    : "bg-muted text-foreground",
+              )}
+            >
+              {ready
+                ? "✓"
                 : failed || error
-                  ? "bg-amber-500 text-black"
-                  : "bg-muted text-foreground",
-            )}
-          >
-            {ready
-              ? "✓"
-              : failed || error
-                ? "!"
-                : running
-                  ? "…"
+                  ? "!"
                   : data
                     ? data.count > 999
                       ? "999+"
                       : data.count
                     : "…"}
-          </span>
+            </span>
+          )}
         </>
       }
     />
@@ -303,6 +309,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
+      <SidebarForkUpdatePill />
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />
