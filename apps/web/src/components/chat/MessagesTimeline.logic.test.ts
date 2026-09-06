@@ -1577,8 +1577,8 @@ describe("deriveMessagesTimelineRows", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     // Compaction is not work: nothing folds, the result row is the timeline,
@@ -1637,8 +1637,8 @@ describe("deriveMessagesTimelineRows", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     // The fold covers only the work; the compaction row stays a sibling and
