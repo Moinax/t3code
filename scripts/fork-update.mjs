@@ -44,6 +44,34 @@ export function saveState(config, state) {
   const temp = `${file}.${NodeCrypto.randomUUID()}`;
   NodeFS.writeFileSync(temp, JSON.stringify({ ...state, updatedAt: Date.now() }), { mode: 0o600 });
   NodeFS.renameSync(temp, file);
+  if (state.stage === "ready") savePreparedUpdate(config, state);
+}
+function savePreparedUpdate(config, state) {
+  const file = NodePath.join(config.stateDir, "prepared.json");
+  const temp = `${file}.${NodeCrypto.randomUUID()}`;
+  NodeFS.writeFileSync(temp, JSON.stringify(state), { mode: 0o600 });
+  NodeFS.renameSync(temp, file);
+}
+export async function readPreparedUpdate(config) {
+  // Older installed runners only write status.json, including after a later upstream update.
+  let prepared = readState(config);
+  if (prepared.stage !== "ready") {
+    try {
+      prepared = JSON.parse(
+        await NodeFSP.readFile(NodePath.join(config.stateDir, "prepared.json"), "utf8"),
+      );
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      return null;
+    }
+  }
+  if (prepared.stage !== "ready") return null;
+  const installed = await NodeFSP.stat(config.target).catch(() => null);
+  return installed &&
+    installed.size === prepared.installedSize &&
+    installed.mtimeMs === prepared.installedMtimeMs
+    ? prepared
+    : null;
 }
 async function digest(file) {
   const hash = NodeCrypto.createHash("sha256");
@@ -78,6 +106,68 @@ export async function readUpdateLog(file) {
   const newline = stdout.indexOf("\n");
   return newline === -1 ? "" : stdout.slice(newline + 1);
 }
+export async function compareLocalBuild(config, prepared) {
+  if (!prepared) return "changed";
+  if (!prepared.workDir || !prepared.commit) return "unknown";
+  const options = {
+    cwd: config.repo,
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: 10000,
+  };
+  const candidate = [
+    "--git-dir",
+    NodePath.join(prepared.workDir, ".git"),
+    "--work-tree",
+    config.repo,
+    "-c",
+    "core.fsmonitor=false",
+  ];
+  const cacheKey = NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([config.repo, prepared.workDir, prepared.commit]))
+    .digest("hex");
+  const cachedIndex = NodePath.join(config.stateDir, `compare-${cacheKey}.index`);
+  const index = `${cachedIndex}.${NodeCrypto.randomUUID()}`;
+  const candidateOptions = { ...options, env: { ...options.env, GIT_INDEX_FILE: index } };
+  try {
+    // The build's index knows about uncommitted files already included in that build.
+    // git diff refreshes index timestamps, so use a private copy and retain that cache
+    // between polls to avoid rehashing every unchanged file on each status request.
+    await NodeFSP.copyFile(cachedIndex, index).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+      return NodeFSP.copyFile(NodePath.join(prepared.workDir, ".git/index"), index);
+    });
+    await exec(
+      "git",
+      [...candidate, "diff", "--quiet", "--no-ext-diff", prepared.commit, "--"],
+      candidateOptions,
+    );
+    const [built, local] = await Promise.all([
+      exec(
+        "git",
+        [...candidate, "ls-tree", "-r", "--name-only", "-z", prepared.commit],
+        candidateOptions,
+      ),
+      exec("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], options),
+    ]);
+    const builtPaths = new Set(built.stdout.split("\0"));
+    for (const file of local.stdout.split("\0")) {
+      if (!file || builtPaths.has(file)) continue;
+      // An unstaged deletion can still be in the source index but absent from the build.
+      const exists = await NodeFSP.lstat(NodePath.join(config.repo, file)).catch((error) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (exists) return "changed";
+    }
+    return "up-to-date";
+  } catch (error) {
+    // git diff exits 1 for changed content; unavailable snapshots must not claim a match.
+    return error.code === 1 ? "changed" : "unknown";
+  } finally {
+    await NodeFSP.rename(index, cachedIndex).catch(() => NodeFSP.rm(index, { force: true }));
+  }
+}
 export async function status(config) {
   const saved = readState(config);
   const state = reconcileState(saved, await active());
@@ -86,23 +176,26 @@ export async function status(config) {
   if (state.runId && /^[a-f0-9-]+$/.test(state.runId)) {
     log = await readUpdateLog(NodePath.join(config.stateDir, `${state.runId}.log`));
   }
-  if (state.stage === "ready") {
-    const installed = await NodeFSP.stat(config.target).catch(() => null);
-    if (
-      !installed ||
-      installed.size !== state.installedSize ||
-      installed.mtimeMs !== state.installedMtimeMs
-    ) {
-      const invalid = {
-        ...state,
-        stage: "error",
-        message: "The installed AppImage changed or is missing. Prepare the update again.",
-      };
-      saveState(config, invalid);
-      return { ...invalid, log };
-    }
+  const prepared = await readPreparedUpdate(config);
+  if (state.stage === "ready" && !prepared) {
+    const invalid = {
+      ...state,
+      stage: "error",
+      message: "The installed AppImage changed or is missing. Prepare the update again.",
+    };
+    saveState(config, invalid);
+    return { ...invalid, log };
   }
-  return { ...state, log };
+  return {
+    ...state,
+    log,
+    localBuildStatus: terminal.has(state.stage)
+      ? await compareLocalBuild(config, prepared)
+      : "unknown",
+    ...(prepared
+      ? { preparedVersion: prepared.version, preparedSource: prepared.source ?? "upstream" }
+      : {}),
+  };
 }
 
 export function commandRunner(logFile) {
@@ -172,9 +265,86 @@ export function affectedTests(changed, prefix, root) {
     .map((file) => file.slice(prefix.length));
 }
 
+async function checkAndBuild(config, run, report, tools, base) {
+  const git = (args) => run("git", args, { cwd: config.workDir });
+  report({
+    stage: "checking",
+    message: "Installing dependencies and checking the desktop, web and server…",
+  });
+  await run(tools.vp, ["install", "--frozen-lockfile"], { cwd: config.workDir });
+  const changed = (await git(["diff", "--name-only", base, "HEAD"])).split("\n");
+  for (const workspace of ["web", "server", "desktop"]) {
+    const cwd = NodePath.join(config.workDir, "apps", workspace);
+    await run(tools.vp, ["run", "typecheck"], { cwd });
+    const tests = affectedTests(changed, `apps/${workspace}/`, config.workDir);
+    if (tests.length) await run(tools.vp, ["test", "run", ...tests], { cwd });
+  }
+  const packages = new Set(
+    changed.filter((file) => file.startsWith("packages/")).map((file) => file.split("/")[1]),
+  );
+  for (const name of packages) {
+    const tests = affectedTests(changed, `packages/${name}/`, config.workDir);
+    if (tests.length)
+      await run(tools.vp, ["test", "run", ...tests], {
+        cwd: NodePath.join(config.workDir, "packages", name),
+      });
+  }
+  if (NodeFS.existsSync(NodePath.join(config.workDir, "scripts/fork-update.test.mjs"))) {
+    await run(process.execPath, ["--test", "scripts/fork-update.test.mjs"], {
+      cwd: config.workDir,
+    });
+  }
+  if (await git(["status", "--porcelain"]))
+    throw new Error(
+      "Dependency installation or checks changed tracked files. Commit the required fixes before building.",
+    );
+  const commit = await git(["rev-parse", "HEAD"]);
+  const pkg = JSON.parse(
+    NodeFS.readFileSync(NodePath.join(config.workDir, "apps/desktop/package.json"), "utf8"),
+  );
+  const version = `${pkg.version}-${config.branch}.${config.source === "local" ? "local." : ""}${commit.slice(0, 9)}`;
+  report({ stage: "building", commit, version, message: "Building the AppImage…" });
+  const releaseDir = NodePath.join(config.workDir, "release");
+  const oldArtifacts = await NodeFSP.readdir(releaseDir).catch((error) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  for (const file of oldArtifacts.filter((file) => file.endsWith(".AppImage"))) {
+    await NodeFSP.unlink(NodePath.join(releaseDir, file));
+  }
+  await run(
+    tools.vp,
+    [
+      "run",
+      "dist:desktop:artifact",
+      "--platform",
+      "linux",
+      "--target",
+      "AppImage",
+      "--arch",
+      "x64",
+      "--build-version",
+      version,
+    ],
+    { cwd: config.workDir },
+  );
+  const artifacts = (await NodeFSP.readdir(NodePath.join(config.workDir, "release"))).filter(
+    (file) => file.endsWith(".AppImage"),
+  );
+  if (artifacts.length !== 1) throw new Error("Expected one built AppImage.");
+  const artifact = NodePath.join(config.workDir, "release", artifacts[0]);
+  if ((await git(["status", "--porcelain"])) || (await git(["rev-parse", "HEAD"])) !== commit)
+    throw new Error("The checkout changed during the build.");
+  return { artifact, commit, version };
+}
+
 export async function prepareUpdate(config, run, report, tools) {
   const git = (args, cwd = config.workDir) => run("git", args, { cwd });
-  report({ stage: "fetching", message: "Fetching the published fork and upstream…" });
+  report({
+    source: "upstream",
+    stage: "fetching",
+    message: "Fetching the published fork and upstream…",
+  });
   // Start from the published fork. Local unpublished commits must never be silently discarded.
   await run("git", [
     "clone",
@@ -260,74 +430,7 @@ export async function prepareUpdate(config, run, report, tools) {
       await git(["merge-base", "--is-ancestor", upstream, "HEAD"]);
       if (await git(["status", "--porcelain"]))
         throw new Error("The repair left uncommitted changes.");
-      report({
-        stage: "checking",
-        message: "Installing dependencies and checking the desktop, web and server…",
-      });
-      await run(tools.vp, ["install", "--frozen-lockfile"], { cwd: config.workDir });
-      const changed = (await git(["diff", "--name-only", original, "HEAD"])).split("\n");
-      for (const workspace of ["web", "server", "desktop"]) {
-        const cwd = NodePath.join(config.workDir, "apps", workspace);
-        await run(tools.vp, ["run", "typecheck"], { cwd });
-        const tests = affectedTests(changed, `apps/${workspace}/`, config.workDir);
-        if (tests.length) await run(tools.vp, ["test", "run", ...tests], { cwd });
-      }
-      const packages = new Set(
-        changed.filter((file) => file.startsWith("packages/")).map((file) => file.split("/")[1]),
-      );
-      for (const name of packages) {
-        const tests = affectedTests(changed, `packages/${name}/`, config.workDir);
-        if (tests.length)
-          await run(tools.vp, ["test", "run", ...tests], {
-            cwd: NodePath.join(config.workDir, "packages", name),
-          });
-      }
-      if (NodeFS.existsSync(NodePath.join(config.workDir, "scripts/fork-update.test.mjs"))) {
-        await run(process.execPath, ["--test", "scripts/fork-update.test.mjs"], {
-          cwd: config.workDir,
-        });
-      }
-      if (await git(["status", "--porcelain"]))
-        throw new Error(
-          "Dependency installation or checks changed tracked files. Commit the required fixes before building.",
-        );
-      commit = await git(["rev-parse", "HEAD"]);
-      const pkg = JSON.parse(
-        NodeFS.readFileSync(NodePath.join(config.workDir, "apps/desktop/package.json"), "utf8"),
-      );
-      version = `${pkg.version}-${config.branch}.${commit.slice(0, 9)}`;
-      report({ stage: "building", commit, version, message: "Building the AppImage…" });
-      const releaseDir = NodePath.join(config.workDir, "release");
-      const oldArtifacts = await NodeFSP.readdir(releaseDir).catch((error) => {
-        if (error.code === "ENOENT") return [];
-        throw error;
-      });
-      for (const file of oldArtifacts.filter((file) => file.endsWith(".AppImage"))) {
-        await NodeFSP.unlink(NodePath.join(releaseDir, file));
-      }
-      await run(
-        tools.vp,
-        [
-          "run",
-          "dist:desktop:artifact",
-          "--platform",
-          "linux",
-          "--target",
-          "AppImage",
-          "--arch",
-          "x64",
-          "--build-version",
-          version,
-        ],
-        { cwd: config.workDir },
-      );
-      const artifacts = (await NodeFSP.readdir(NodePath.join(config.workDir, "release"))).filter(
-        (file) => file.endsWith(".AppImage"),
-      );
-      if (artifacts.length !== 1) throw new Error("Expected one built AppImage.");
-      artifact = NodePath.join(config.workDir, "release", artifacts[0]);
-      if ((await git(["status", "--porcelain"])) || (await git(["rev-parse", "HEAD"])) !== commit)
-        throw new Error("The checkout changed during the build.");
+      ({ artifact, commit, version } = await checkAndBuild(config, run, report, tools, original));
       break;
     } catch (error) {
       await repair(error);
@@ -365,6 +468,75 @@ export async function prepareUpdate(config, run, report, tools) {
   });
 }
 
+export async function prepareLocalUpdate(config, run, report, tools) {
+  const git = (args, options = {}) =>
+    run("git", args, {
+      cwd: config.repo,
+      ...options,
+      env: { GIT_OPTIONAL_LOCKS: "0", ...options.env },
+    });
+  report({ source: "local", stage: "snapshotting", message: "Snapshotting local changes…" });
+  if (await git(["diff", "--name-only", "--diff-filter=U"]))
+    throw new Error("Resolve the local merge conflicts before building.");
+  const original = await git(["rev-parse", "HEAD"]);
+  const base = await git(["merge-base", original, `refs/remotes/origin/${config.branch}`]).catch(
+    () => original,
+  );
+  const index = NodePath.join(config.stateDir, `${NodeCrypto.randomUUID()}.index`);
+  let snapshot;
+  try {
+    // An alternate index includes the working files without changing staged changes or branch refs.
+    const sourceIndex = await git(["rev-parse", "--path-format=absolute", "--git-path", "index"]);
+    await NodeFSP.copyFile(sourceIndex, index);
+    const env = { GIT_INDEX_FILE: index };
+    await git(["-c", "core.splitIndex=false", "add", "--all", "--", "."], { env });
+    const tree = await git(["write-tree"], { env });
+    snapshot = await git([
+      "-c",
+      "user.name=T3 Code",
+      "-c",
+      "user.email=local-build@t3.codes",
+      "-c",
+      "commit.gpgsign=false",
+      "commit-tree",
+      tree,
+      "-p",
+      original,
+      "-m",
+      "Local desktop build snapshot",
+    ]);
+  } finally {
+    await NodeFSP.rm(index, { force: true });
+  }
+  if ((await git(["rev-parse", "HEAD"])) !== original)
+    throw new Error("The local checkout changed while taking the snapshot. Retry the build.");
+  await run("git", ["clone", "--no-local", "--no-checkout", config.repo, config.workDir]);
+  const candidate = (args) => git(args, { cwd: config.workDir });
+  await candidate(["fetch", "--no-tags", config.repo, snapshot]);
+  await candidate(["checkout", "--detach", snapshot]);
+  await candidate(["remote", "set-url", "--push", "origin", "DISABLED"]);
+  const { artifact, commit, version } = await checkAndBuild(
+    { ...config, source: "local" },
+    run,
+    report,
+    tools,
+    base,
+  );
+  const sha256 = await digest(artifact);
+  report({ stage: "installing", message: "Installing the local build…" });
+  await installArtifact(artifact, config.target);
+  const installed = await NodeFSP.stat(config.target);
+  report({
+    installedSize: installed.size,
+    installedMtimeMs: installed.mtimeMs,
+    stage: "ready",
+    commit,
+    version,
+    sha256,
+    message: "Local build installed. Restart when you are ready.",
+  });
+}
+
 export async function installArtifact(artifact, target) {
   NodeFS.mkdirSync(NodePath.dirname(target), { recursive: true });
   const pending = `${target}.pending`;
@@ -395,19 +567,27 @@ async function main() {
     console.log(JSON.stringify(await status(config)));
     return;
   }
-  if (action === "start") {
+  if (action === "start" || action === "start-local") {
     if (await active()) {
       console.log(JSON.stringify(await status(config)));
       return;
     }
     const previous = await status(config);
-    if (previous.stage === "ready" && previous.version !== process.argv[3])
+    if (action === "start-local" && previous.localBuildStatus === "up-to-date") {
+      console.log(JSON.stringify(previous));
+      return;
+    }
+    if (
+      action === "start" &&
+      previous.preparedVersion &&
+      previous.preparedVersion !== process.argv[3]
+    )
       throw new Error("An update is already prepared. Restart before preparing another one.");
     const node = await findTool("node", [
       NodePath.join(NodeOS.homedir(), ".local/share/fnm/aliases/default/bin/node"),
     ]);
     // Snapshot the runner so a rebase or edit cannot change a job already in progress.
-    const runner = NodePath.join(config.stateDir, "runner.mjs");
+    const runner = NodePath.join(config.stateDir, `runner-${NodeCrypto.randomUUID()}.mjs`);
     await NodeFSP.copyFile(NodeURL.fileURLToPath(import.meta.url), runner);
     await exec("systemd-run", [
       "--user",
@@ -426,7 +606,7 @@ async function main() {
       NodePath.join(config.stateDir, "lock"),
       node,
       runner,
-      "run",
+      action === "start-local" ? "run-local" : "run",
       process.argv[3] || "",
     ]);
     console.log(JSON.stringify(await status(config)));
@@ -443,7 +623,10 @@ async function main() {
   }
   if (action === "restart") {
     const state = await status(config);
-    if (state.stage !== "ready" || !state.sha256 || (await digest(config.target)) !== state.sha256)
+    const prepared = await readPreparedUpdate(config);
+    if (!terminal.has(state.stage))
+      throw new Error("Wait for the current build before restarting.");
+    if (!prepared?.sha256 || (await digest(config.target)) !== prepared.sha256)
       throw new Error(
         "The installed AppImage no longer matches the prepared update. Prepare it again.",
       );
@@ -466,11 +649,19 @@ async function main() {
     console.log(JSON.stringify(state));
     return;
   }
-  if (action !== "run") throw new Error(`Unknown action: ${action}`);
+  if (action !== "run" && action !== "run-local") throw new Error(`Unknown action: ${action}`);
+  const previous = await readPreparedUpdate(config);
+  if (previous) savePreparedUpdate(config, previous);
   const runId = NodeCrypto.randomUUID();
   const workDir = NodePath.join(config.stateDir, "work", runId);
   NodeFS.mkdirSync(NodePath.dirname(workDir), { recursive: true });
-  let state = { ...empty(), stage: "starting", runId, workDir };
+  let state = {
+    ...empty(),
+    source: action === "run-local" ? "local" : "upstream",
+    stage: "starting",
+    runId,
+    workDir,
+  };
   let cancelled = false;
   const report = (patch) => {
     if (cancelled && patch.stage !== "cancelled") throw new Error("Update cancelled.");
@@ -489,6 +680,11 @@ async function main() {
       NodePath.join(NodeOS.homedir(), ".local/share/vite-plus/bin/vp"),
       NodePath.join(NodeOS.homedir(), ".vite-plus/bin/vp"),
     ]);
+    const run = commandRunner(NodePath.join(config.stateDir, `${runId}.log`));
+    if (action === "run-local") {
+      await prepareLocalUpdate({ ...config, workDir }, run, report, { vp });
+      return;
+    }
     const codex = await findTool("codex", [NodePath.join(NodeOS.homedir(), ".local/bin/codex")]);
     let published;
     try {
@@ -505,7 +701,7 @@ async function main() {
         workDir,
         runningCommit: process.argv[3]?.match(/-moinax\.([a-f0-9]+)$/)?.[1],
       },
-      commandRunner(NodePath.join(config.stateDir, `${runId}.log`)),
+      run,
       report,
       { vp, codex },
     );

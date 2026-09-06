@@ -1,4 +1,4 @@
-import { isForkUpdateRunning } from "@t3tools/contracts";
+import { getForkUpdatePreparedVersion, isForkUpdateRunning } from "@t3tools/contracts";
 import { useForkMaintenance, useForkMaintenanceMonitor } from "../../state/forkMaintenance";
 import {
   ArrowLeftIcon,
@@ -147,11 +147,12 @@ function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
   const { data, error, loading } = useForkUpdates();
   const maintenance = useForkMaintenance();
   const job = maintenance.state;
-  const ready = job?.stage === "ready" && job.version !== job.runningVersion;
   const running = job ? isForkUpdateRunning(job.stage) : false;
+  const preparedVersion = job ? getForkUpdatePreparedVersion(job) : null;
+  const ready = !running && !!preparedVersion && preparedVersion !== job?.runningVersion;
   const failed = job?.stage === "error" || !!maintenance.error;
   const label = ready
-    ? "Fork update ready: restart from Fork updates"
+    ? `${job?.preparedSource === "local" ? "Local build" : "Fork update"} ready: restart from Fork updates`
     : running
       ? `Fork update: ${job?.message}`
       : failed

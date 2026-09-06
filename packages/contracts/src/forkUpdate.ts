@@ -1,12 +1,23 @@
 import * as Schema from "effect/Schema";
 
-export const ForkUpdateAction = Schema.Literals(["status", "start", "cancel", "restart"]);
+export const ForkUpdateAction = Schema.Literals([
+  "status",
+  "start",
+  "start-local",
+  "cancel",
+  "restart",
+]);
 export type ForkUpdateAction = typeof ForkUpdateAction.Type;
 export const ForkUpdateState = Schema.Struct({
   available: Schema.Boolean,
+  source: Schema.optionalKey(Schema.Literals(["upstream", "local"])),
+  preparedVersion: Schema.optionalKey(Schema.String),
+  preparedSource: Schema.optionalKey(Schema.Literals(["upstream", "local"])),
+  localBuildStatus: Schema.optionalKey(Schema.Literals(["up-to-date", "changed", "unknown"])),
   stage: Schema.Literals([
     "idle",
     "starting",
+    "snapshotting",
     "fetching",
     "rebasing",
     "repairing",
@@ -29,6 +40,9 @@ export const ForkUpdateState = Schema.Struct({
   log: Schema.String,
 });
 export type ForkUpdateState = typeof ForkUpdateState.Type;
+export function getForkUpdatePreparedVersion(state: ForkUpdateState): string | null {
+  return state.preparedVersion ?? (state.stage === "ready" ? state.version : null);
+}
 export function isForkUpdateRunning(stage: ForkUpdateState["stage"]): boolean {
   return !["idle", "ready", "error", "cancelled"].includes(stage);
 }

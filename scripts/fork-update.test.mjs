@@ -9,6 +9,9 @@ import * as NodeUtil from "node:util";
 import {
   commandRunner,
   prepareUpdate,
+  prepareLocalUpdate,
+  readPreparedUpdate,
+  compareLocalBuild,
   installArtifact,
   reconcileState,
   saveState,
@@ -16,6 +19,7 @@ import {
   readUpdateLog,
 } from "./fork-update.mjs";
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
+
 NodeTest.test(
   "activity tail preserves ANSI colors and discards a truncated first line",
   async (t) => {
@@ -140,6 +144,212 @@ NodeTest.test(
     );
   },
 );
+
+NodeTest.test(
+  "local builds snapshot unpublished, staged, unstaged and new files without changing the source",
+  async (t) => {
+    const f = await fixture(t);
+    const file = (name) => NodePath.join(f.config.repo, name);
+    await NodeFSP.writeFile(file("local-commit"), "unpublished\n");
+    await git(f.config.repo, "add", "local-commit");
+    await git(f.config.repo, "commit", "-m", "local work");
+    const head = await git(f.config.repo, "rev-parse", "HEAD");
+    await NodeFSP.writeFile(file("custom"), "staged\n");
+    await git(f.config.repo, "add", "custom");
+    await NodeFSP.writeFile(file("custom"), "working version\n");
+    await NodeFSP.writeFile(file("new-file"), "new\n");
+    await NodeFSP.unlink(file("feature"));
+    await NodeFSP.mkdir(file("release"));
+    await NodeFSP.writeFile(file("release/ignored"), "ignored\n");
+    await NodeFSP.writeFile(file("release/forced"), "explicitly tracked\n");
+    await git(f.config.repo, "add", "--force", "release/forced");
+    await NodeFSP.symlink("custom", file("local-link"));
+    await NodeFSP.writeFile(file("local-script"), "#!/bin/sh\n", { mode: 0o755 });
+    const before = await git(f.config.repo, "status", "--porcelain");
+    const index = await NodeFSP.readFile(file(".git/index"));
+    await prepareLocalUpdate(f.config, f.run, f.report, { vp: "vp" });
+    NodeAssert.equal(f.state().source, "local");
+    NodeAssert.equal(f.state().stage, "ready");
+    NodeAssert.match(f.state().version, /^1\.0\.0-moinax\.local\.[a-f0-9]{9}$/);
+    NodeAssert.deepEqual(await NodeFSP.readFile(file(".git/index")), index);
+    NodeAssert.equal(await git(f.config.repo, "status", "--porcelain"), before);
+    NodeAssert.equal(await git(f.config.repo, "rev-parse", "HEAD"), head);
+    NodeAssert.equal(await git(f.config.repo, "show", ":custom"), "staged");
+    NodeAssert.equal(await NodeFSP.readFile(file("custom"), "utf8"), "working version\n");
+    NodeAssert.equal(
+      await NodeFSP.readFile(NodePath.join(f.config.workDir, "custom"), "utf8"),
+      "working version\n",
+    );
+    NodeAssert.equal(
+      await NodeFSP.readFile(NodePath.join(f.config.workDir, "local-commit"), "utf8"),
+      "unpublished\n",
+    );
+    NodeAssert.equal(
+      await NodeFSP.readFile(NodePath.join(f.config.workDir, "new-file"), "utf8"),
+      "new\n",
+    );
+    NodeAssert.equal(
+      await NodeFSP.readFile(NodePath.join(f.config.workDir, "release/forced"), "utf8"),
+      "explicitly tracked\n",
+    );
+    NodeAssert.equal(NodeFS.existsSync(NodePath.join(f.config.workDir, "feature")), false);
+    NodeAssert.equal(NodeFS.existsSync(NodePath.join(f.config.workDir, "release/ignored")), false);
+    NodeAssert.equal(
+      await NodeFSP.readlink(NodePath.join(f.config.workDir, "local-link")),
+      "custom",
+    );
+    NodeAssert.ok(
+      (await NodeFSP.stat(NodePath.join(f.config.workDir, "local-script"))).mode & 0o100,
+    );
+    NodeAssert.equal(await git(f.config.origin, "rev-parse", "moinax"), f.original);
+    NodeAssert.equal(
+      f.calls.some(([command, action]) => command === "git" && ["push", "rebase"].includes(action)),
+      false,
+    );
+    NodeAssert.equal(
+      f.calls.some((call) => call.includes(f.config.upstream)),
+      false,
+    );
+    NodeAssert.equal(NodeFS.existsSync(NodePath.join(f.config.stateDir, "published.json")), false);
+    NodeAssert.equal(await NodeFSP.readFile(f.config.target, "utf8"), "new app");
+    NodeAssert.equal(
+      await compareLocalBuild(f.config, { ...f.state(), workDir: f.config.workDir }),
+      "up-to-date",
+    );
+  },
+);
+
+NodeTest.test(
+  "a failed local check keeps the installed update ready through failure and cancellation",
+  async (t) => {
+    const f = await fixture(t);
+    const installed = await NodeFSP.stat(f.config.target);
+    const prepared = {
+      stage: "ready",
+      source: "upstream",
+      version: "1.0.0-moinax.abc123",
+      installedSize: installed.size,
+      installedMtimeMs: installed.mtimeMs,
+    };
+    saveState(f.config, prepared);
+    const report = (patch) => {
+      f.report(patch);
+      saveState(f.config, f.state());
+    };
+    const run = (command, args, options) => {
+      if (command === "vp" && args[1] === "typecheck") throw new Error("local check failed");
+      return f.run(command, args, options);
+    };
+    await NodeAssert.rejects(
+      prepareLocalUpdate(f.config, run, report, { vp: "vp" }),
+      /local check failed/,
+    );
+    for (const stage of ["error", "cancelled"]) {
+      report({ stage });
+      NodeAssert.equal((await readPreparedUpdate(f.config)).version, prepared.version);
+    }
+    NodeAssert.equal(await NodeFSP.readFile(f.config.target, "utf8"), "old app");
+    NodeAssert.equal(f.stages.includes("installing"), false);
+    await NodeFSP.writeFile(f.config.target, "externally replaced app");
+    NodeAssert.equal(await readPreparedUpdate(f.config), null);
+  },
+);
+
+NodeTest.test(
+  "local build uses its snapshot even if the source is edited while building",
+  async (t) => {
+    const f = await fixture(t);
+    const report = (patch) => {
+      f.report(patch);
+      saveState(f.config, f.state());
+    };
+    const run = async (command, args, options) => {
+      if (command === "vp" && args[0] === "install")
+        await NodeFSP.writeFile(NodePath.join(f.config.repo, "custom"), "later edit\n");
+      return f.run(command, args, options);
+    };
+    await prepareLocalUpdate(f.config, run, report, { vp: "vp" });
+    NodeAssert.equal(
+      await NodeFSP.readFile(NodePath.join(f.config.workDir, "custom"), "utf8"),
+      "fork\n",
+    );
+    NodeAssert.equal(
+      await NodeFSP.readFile(NodePath.join(f.config.repo, "custom"), "utf8"),
+      "later edit\n",
+    );
+    NodeAssert.equal((await readPreparedUpdate(f.config)).version, f.state().version);
+    NodeAssert.equal((await readPreparedUpdate(f.config)).source, "local");
+  },
+);
+
+NodeTest.test(
+  "local build comparison detects content changes and ignores commits and generated files",
+  async (t) => {
+    const f = await fixture(t);
+    await NodeFSP.writeFile(NodePath.join(f.config.repo, "new-file"), "snapshot\n");
+    await prepareLocalUpdate(f.config, f.run, f.report, { vp: "vp" });
+    const prepared = { ...f.state(), workDir: f.config.workDir };
+    const compare = () => compareLocalBuild(f.config, prepared);
+    const sourceIndex = await NodeFSP.readFile(NodePath.join(f.config.repo, ".git/index"));
+    const buildIndex = await NodeFSP.readFile(NodePath.join(f.config.workDir, ".git/index"));
+    NodeAssert.equal(await compare(), "up-to-date");
+    NodeAssert.deepEqual(
+      await NodeFSP.readFile(NodePath.join(f.config.repo, ".git/index")),
+      sourceIndex,
+    );
+    NodeAssert.deepEqual(
+      await NodeFSP.readFile(NodePath.join(f.config.workDir, ".git/index")),
+      buildIndex,
+    );
+    await NodeFSP.mkdir(NodePath.join(f.config.repo, "release"));
+    await NodeFSP.writeFile(NodePath.join(f.config.repo, "release/generated"), "output");
+    await NodeFSP.appendFile(NodePath.join(f.config.repo, ".git/info/exclude"), "\nprivate-note\n");
+    await NodeFSP.writeFile(NodePath.join(f.config.repo, "private-note"), "ignored");
+    NodeAssert.equal(await compare(), "up-to-date");
+    await git(f.config.repo, "add", "new-file");
+    await git(f.config.repo, "commit", "-m", "commit already built content");
+    NodeAssert.equal(await compare(), "up-to-date");
+    await NodeFSP.writeFile(NodePath.join(f.config.repo, "new-file"), "modified\n");
+    NodeAssert.equal(await compare(), "changed");
+    await NodeFSP.writeFile(NodePath.join(f.config.repo, "new-file"), "snapshot\n");
+    NodeAssert.equal(await compare(), "up-to-date");
+    await NodeFSP.chmod(NodePath.join(f.config.repo, "new-file"), 0o755);
+    NodeAssert.equal(await compare(), "changed");
+    await NodeFSP.chmod(NodePath.join(f.config.repo, "new-file"), 0o644);
+    await NodeFSP.unlink(NodePath.join(f.config.repo, "new-file"));
+    NodeAssert.equal(await compare(), "changed");
+    await NodeFSP.writeFile(NodePath.join(f.config.repo, "new-file"), "snapshot\n");
+    await NodeFSP.writeFile(NodePath.join(f.config.repo, "later-file"), "new");
+    NodeAssert.equal(await compare(), "changed");
+    await git(f.config.repo, "add", "later-file");
+    NodeAssert.equal(await compare(), "changed");
+    await NodeFSP.unlink(NodePath.join(f.config.repo, "later-file"));
+    NodeAssert.equal(await compare(), "up-to-date");
+    await NodeFSP.rm(f.config.workDir, { recursive: true });
+    NodeAssert.equal(await compare(), "unknown");
+    NodeAssert.equal(await compareLocalBuild(f.config, null), "changed");
+  },
+);
+
+NodeTest.test("recognizes a prepared update written by an older installed runner", async (t) => {
+  const f = await fixture(t);
+  const installed = await NodeFSP.stat(f.config.target);
+  const old = {
+    stage: "ready",
+    version: "1.0.0-moinax.old",
+    installedSize: 1,
+    installedMtimeMs: 0,
+  };
+  saveState(f.config, old);
+  const latest = {
+    stage: "ready",
+    version: "1.0.0-moinax.new",
+    installedSize: installed.size,
+    installedMtimeMs: installed.mtimeMs,
+  };
+  await NodeFSP.writeFile(NodePath.join(f.config.stateDir, "status.json"), JSON.stringify(latest));
+  NodeAssert.equal((await readPreparedUpdate(f.config)).version, latest.version);
+});
 
 NodeTest.test(
   "a conflict invokes the configured agent, then verifies its completed rebase",

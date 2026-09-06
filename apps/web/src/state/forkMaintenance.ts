@@ -25,7 +25,7 @@ export const useForkMaintenance = create<ForkMaintenanceStore>((set, get) => ({
       const previous = get().state;
       const state = await bridge(action);
       set({ state, error: null });
-      if (state.stage === "ready" && previous?.stage !== "ready") {
+      if (state.stage === "ready" && state.source !== "local" && previous?.stage !== "ready") {
         void useForkUpdatesStore.getState().refresh(true);
       }
     } catch (error) {

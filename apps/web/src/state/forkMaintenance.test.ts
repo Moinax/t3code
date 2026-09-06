@@ -68,3 +68,22 @@ it("refreshes the commit count once when a prepared update becomes available", a
   expect(refresh).toHaveBeenCalledTimes(1);
   expect(useForkMaintenance.getState().state?.version).not.toBe(state.runningVersion);
 });
+
+it("replaces an upstream preparation with a local build without refreshing GitHub", async () => {
+  const refresh = vi.spyOn(useForkUpdatesStore.getState(), "refresh").mockResolvedValue();
+  useForkMaintenance.setState({
+    state: { ...state, stage: "ready", version: "1.0.0-moinax.def456" },
+  });
+  bridge.mockResolvedValue({ ...state, source: "local", stage: "snapshotting" });
+  await useForkMaintenance.getState().request("start-local");
+  expect(bridge).toHaveBeenCalledWith("start-local");
+  bridge.mockResolvedValue({
+    ...state,
+    source: "local",
+    stage: "ready",
+    version: "1.0.0-moinax.local.123456789",
+  });
+  await useForkMaintenance.getState().request("status");
+  expect(refresh).not.toHaveBeenCalled();
+  expect(useForkMaintenance.getState().state?.source).toBe("local");
+});
