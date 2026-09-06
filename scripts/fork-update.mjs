@@ -71,19 +71,20 @@ export function reconcileState(state, running) {
     };
   return state;
 }
+export async function readUpdateLog(file) {
+  // Read one extra byte so a truncated first line (or ANSI sequence) can be discarded.
+  const { stdout } = await exec("tail", ["-c", "16001", file]).catch(() => ({ stdout: "" }));
+  if (Buffer.byteLength(stdout) <= 16000) return stdout;
+  const newline = stdout.indexOf("\n");
+  return newline === -1 ? "" : stdout.slice(newline + 1);
+}
 export async function status(config) {
   const saved = readState(config);
   const state = reconcileState(saved, await active());
   if (state.stage !== saved.stage && state.stage === "error") saveState(config, state);
   let log = "";
   if (state.runId && /^[a-f0-9-]+$/.test(state.runId)) {
-    // Bounded tail, even if a build or agent has produced a large log.
-    const { stdout } = await exec("tail", [
-      "-c",
-      "16000",
-      NodePath.join(config.stateDir, `${state.runId}.log`),
-    ]).catch(() => ({ stdout: "" }));
-    log = stdout;
+    log = await readUpdateLog(NodePath.join(config.stateDir, `${state.runId}.log`));
   }
   if (state.stage === "ready") {
     const installed = await NodeFSP.stat(config.target).catch(() => null);

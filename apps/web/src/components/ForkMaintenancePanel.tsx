@@ -1,5 +1,6 @@
 import { isForkUpdateRunning } from "@t3tools/contracts";
 import { useForkMaintenance } from "../state/forkMaintenance";
+import { ForkUpdateActivity } from "./ForkUpdateActivity";
 import { Button } from "./ui/button";
 
 export function ForkMaintenancePanel() {
@@ -65,15 +66,13 @@ export function ForkMaintenancePanel() {
           {error}
         </p>
       )}
-      {state.log && (
-        <details>
-          <summary className="cursor-pointer text-xs text-muted-foreground">
-            Update activity
-          </summary>
-          <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-3 text-xs">
-            {state.log}
-          </pre>
-        </details>
+      {(state.log || running) && (
+        <ForkUpdateActivity
+          key={state.runId}
+          log={state.log}
+          running={running}
+          defaultOpen={running || state.stage === "error"}
+        />
       )}
       {state.workDir && (state.stage === "error" || state.stage === "cancelled") && (
         <p className="break-all text-xs text-muted-foreground">

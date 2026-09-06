@@ -13,8 +13,25 @@ import {
   reconcileState,
   saveState,
   readState,
+  readUpdateLog,
 } from "./fork-update.mjs";
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
+NodeTest.test(
+  "activity tail preserves ANSI colors and discards a truncated first line",
+  async (t) => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3fork-log-"));
+    t.after(() => NodeFSP.rm(root, { recursive: true, force: true }));
+    const file = NodePath.join(root, "update.log");
+    const colored = "\u001b[32mMigration complete\u001b[39m\n";
+    await NodeFSP.writeFile(file, colored);
+    NodeAssert.equal(await readUpdateLog(file), colored);
+    await NodeFSP.writeFile(file, `${"x".repeat(17000)}\n${colored}`);
+    NodeAssert.equal(await readUpdateLog(file), colored);
+    await NodeFSP.writeFile(file, "x".repeat(17000));
+    NodeAssert.equal(await readUpdateLog(file), "");
+    NodeAssert.equal(await readUpdateLog(NodePath.join(root, "missing.log")), "");
+  },
+);
 const git = async (cwd, ...args) =>
   (await exec("git", args, { cwd, env: { ...process.env, GIT_EDITOR: "true" } })).stdout.trim();
 
