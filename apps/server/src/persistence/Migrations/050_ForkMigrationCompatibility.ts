@@ -8,9 +8,9 @@ import ProjectionThreadSessionStatusDetail from "./049_ProjectionThreadSessionSt
 import ProjectionThreadPullRequests from "./050_ProjectionThreadPullRequests.ts";
 
 /**
- * Repair databases that recorded fork migrations before upstream assigned
- * the same IDs. The migrator skips the upstream migrations, so repeat their
- * idempotent effects at a new ID.
+ * Repair databases that recorded fork migrations 43 through 45 and 48 before
+ * upstream assigned those IDs. Some fork releases also recorded the original
+ * compatibility repair as migration 49. Repeat every skipped effect at 50.
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

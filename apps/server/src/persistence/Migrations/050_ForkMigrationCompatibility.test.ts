@@ -30,7 +30,9 @@ layer("051_ForkMigrationCompatibility", (it) => {
       yield* runMigrations({ toMigrationInclusive: 47 });
       yield* sql`
         INSERT INTO effect_sql_migrations (migration_id, name)
-        VALUES (48, 'ProjectionThreadSessionStatusDetail')
+        VALUES
+          (48, 'ProjectionThreadSessionStatusDetail'),
+          (49, 'ForkMigrationCompatibility')
       `;
 
       yield* runMigrations({ toMigrationInclusive: 51 });
