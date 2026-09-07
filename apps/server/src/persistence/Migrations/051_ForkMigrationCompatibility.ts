@@ -10,7 +10,8 @@ import ProjectionThreadPullRequests from "./050_ProjectionThreadPullRequests.ts"
 /**
  * Repair databases that recorded fork migrations 43 through 45 and 48 before
  * upstream assigned those IDs. Some fork releases also recorded the original
- * compatibility repair as migration 49. Repeat every skipped effect at 50.
+ * compatibility repair as migration 49. Repeat every skipped effect at 51,
+ * after upstream's migrations through 50 have had a chance to run.
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
