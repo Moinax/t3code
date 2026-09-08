@@ -55,7 +55,7 @@ export function deepLinkSocketPath(input: {
       NodePath.join(input.tmpDir, `${input.uid}-${name}`);
 }
 
-export class DeepLinkSocketError extends Schema.TaggedErrorClass<DeepLinkSocketError>()(
+export class DeepLinkSocketError extends Schema.TaggedError<DeepLinkSocketError>()(
   "DeepLinkSocketError",
   {
     socketPath: Schema.String,

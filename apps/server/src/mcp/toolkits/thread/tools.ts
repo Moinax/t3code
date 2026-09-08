@@ -5,13 +5,10 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
-export class ThreadTitleError extends Schema.TaggedErrorClass<ThreadTitleError>()(
-  "ThreadTitleError",
-  {
-    reason: Schema.Literals(["capability-unavailable", "empty-title", "dispatch-failed"]),
-    detail: Schema.String,
-  },
-) {
+export class ThreadTitleError extends Schema.TaggedError<ThreadTitleError>()("ThreadTitleError", {
+  reason: Schema.Literals(["capability-unavailable", "empty-title", "dispatch-failed"]),
+  detail: Schema.String,
+}) {
   override get message(): string {
     return this.detail;
   }

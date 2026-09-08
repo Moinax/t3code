@@ -50,6 +50,19 @@ export function normalizePreviewOpenInput(
   };
 }
 
+const requirePreviewCapability = McpInvocationContext.requireMcpCapability("preview").pipe(
+  Effect.mapError(
+    (error) =>
+      new PreviewAutomationUnavailableError({
+        capability: "preview",
+        environmentId: error.environmentId,
+        threadId: error.threadId,
+        providerSessionId: error.providerSessionId,
+        providerInstanceId: error.providerInstanceId,
+      }),
+  ),
+);
+
 const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   operation: PreviewAutomationOperation,
   input: unknown,
@@ -60,18 +73,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   import("@t3tools/contracts").PreviewAutomationError,
   McpInvocationContext.McpInvocationContext | PreviewAutomationBroker.PreviewAutomationBroker
 > {
-  const scope = yield* McpInvocationContext.requireMcpCapability("preview").pipe(
-    Effect.mapError(
-      (error) =>
-        new PreviewAutomationUnavailableError({
-          capability: "preview",
-          environmentId: error.environmentId,
-          threadId: error.threadId,
-          providerSessionId: error.providerSessionId,
-          providerInstanceId: error.providerInstanceId,
-        }),
-    ),
-  );
+  const scope = yield* requirePreviewCapability;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   return yield* broker.invoke<A>({
     scope,
@@ -197,7 +199,7 @@ const handlers = {
     invokeTargeted<PreviewAutomationRecordingStatus>("recordingStart", input ?? {}),
   preview_recording_stop: (input) =>
     Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.requireMcpCapability("preview");
+      const scope = yield* requirePreviewCapability;
       const response = yield* invokeTargeted<unknown>(
         "recordingStop",
         { ...input, transferToEnvironment: true },

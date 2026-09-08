@@ -12,7 +12,7 @@ import * as IpcChannels from "../channels.ts";
 
 declare const __T3CODE_FORK_UPDATE_RUNNER__: string;
 
-class ForkUpdateError extends Schema.TaggedErrorClass<ForkUpdateError>()("ForkUpdateError", {
+class ForkUpdateError extends Schema.TaggedError<ForkUpdateError>()("ForkUpdateError", {
   message: Schema.String,
 }) {}
 const RunnerState = Schema.Struct({

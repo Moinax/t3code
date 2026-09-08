@@ -22,9 +22,9 @@ import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import {
   claimPreviewRecording,
   normalizePreviewOpenInput,
-  PreviewToolkitHandlersLive,
+  PreviewStandardToolkitHandlersLive,
 } from "./handlers.ts";
-import { PreviewToolkit } from "./tools.ts";
+import { PreviewStandardToolkit } from "./tools.ts";
 
 describe("normalizePreviewOpenInput", () => {
   it("leaves an unstated visibility for the client preference to decide", () => {
@@ -183,10 +183,10 @@ describe("preview capability failures", () => {
         issuedAt: 1,
       };
 
-      const error = yield* PreviewToolkit.pipe(
+      const error = yield* PreviewStandardToolkit.pipe(
         Effect.flatMap((toolkit) => toolkit.handle("preview_status", {})),
         Effect.flatMap(Stream.runCollect),
-        Effect.provide(PreviewToolkitHandlersLive),
+        Effect.provide(PreviewStandardToolkitHandlersLive),
         Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
         Effect.provideService(PreviewAutomationBroker.PreviewAutomationBroker, {
           connect: () => Effect.die("the broker must not be reached"),
