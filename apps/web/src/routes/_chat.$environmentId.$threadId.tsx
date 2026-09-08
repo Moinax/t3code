@@ -74,15 +74,20 @@ function ChatThreadRouteView() {
     environmentHasAnyThreads,
     serverThreadDeleted: serverThreadStatus === "deleted",
   });
+  const routeEnvironmentId = threadRef?.environmentId ?? null;
+  const routeThreadId = threadRef?.threadId ?? null;
 
   useEffect(() => {
-    if (!threadRef || renderState !== "missing") {
+    if (routeEnvironmentId === null || routeThreadId === null || renderState !== "missing") {
       return;
     }
 
     const clearPendingFileDrops = () => {
       const { clearPendingFileDropsForThread } = useSidebarPendingFileDropStore.getState();
-      clearPendingFileDropsForThread(threadRef);
+      clearPendingFileDropsForThread({
+        environmentId: routeEnvironmentId,
+        threadId: routeThreadId,
+      });
     };
 
     if (exit === "stay") {
@@ -102,7 +107,7 @@ function ChatThreadRouteView() {
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [exit, navigate, renderState, threadRef]);
+  }, [exit, navigate, renderState, routeEnvironmentId, routeThreadId]);
 
   useEffect(() => {
     if (!threadRef || !serverThreadStarted || !draftThread) {
