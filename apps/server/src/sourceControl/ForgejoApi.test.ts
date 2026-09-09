@@ -9,6 +9,7 @@ import * as Option from "effect/Option";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as ForgejoApi from "./ForgejoApi.ts";
+import * as ForgejoSourceControlProvider from "./ForgejoSourceControlProvider.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import type * as VcsDriver from "../vcs/VcsDriver.ts";
@@ -228,6 +229,8 @@ it.effect("parses pull request responses from the Forgejo REST API", () =>
         headRefName: "feature/forgejo",
         state: "open",
         updatedAt: Option.some(DateTime.makeUnsafe("2026-01-02T00:00:00.000Z")),
+        closedAt: null,
+        mergedAt: null,
       });
       assert.strictEqual(
         execute.mock.calls[0]?.[0].url,
@@ -236,6 +239,51 @@ it.effect("parses pull request responses from the Forgejo REST API", () =>
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );
+
+for (const scenario of [
+  {
+    name: "merged",
+    merged: true,
+    closed_at: "2026-01-03T10:00:00Z",
+    merged_at: "2026-01-03T10:00:00Z",
+  },
+  { name: "closed", merged: false, closed_at: "2026-01-03T10:00:00Z", merged_at: null },
+  { name: "missing dates", merged: true },
+  { name: "null dates", merged: true, closed_at: null, merged_at: null },
+]) {
+  it.effect(
+    `preserves terminal dates through Forgejo list and detail lookups: ${scenario.name}`,
+    () =>
+      Effect.gen(function* () {
+        const response = {
+          ...forgejoPullRequest,
+          state: "closed",
+          merged: scenario.merged,
+          closed_at: scenario.closed_at,
+          merged_at: scenario.merged_at,
+          updated_at: "2026-01-05T00:00:00Z",
+        };
+        const { layerEffect } = makeLayer({
+          response: (request) =>
+            Response.json(request.url.endsWith("/pulls") ? [response] : response),
+        });
+        const layer = yield* layerEffect;
+        const provider = yield* ForgejoSourceControlProvider.make.pipe(Effect.provide(layer));
+        const listed = yield* provider.listChangeRequests({
+          cwd: "/repo",
+          headSelector: "feature/forgejo",
+          state: "all",
+        });
+        const detail = yield* provider.getChangeRequest({ cwd: "/repo", reference: "42" });
+        assert.strictEqual(listed.length, 1);
+        for (const result of [...listed, detail]) {
+          assert.strictEqual(result.state, scenario.merged ? "merged" : "closed");
+          assert.strictEqual(result.closedAt, scenario.closed_at ?? null);
+          assert.strictEqual(result.mergedAt, scenario.merged_at ?? null);
+        }
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+}
 
 it.effect("uses the http scheme for plain-http Forgejo remotes", () =>
   Effect.gen(function* () {

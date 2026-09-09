@@ -10,6 +10,8 @@ export interface NormalizedForgejoPullRequestRecord {
   readonly baseRefName: string;
   readonly headRefName: string;
   readonly state: "open" | "closed" | "merged";
+  readonly closedAt?: string | null;
+  readonly mergedAt?: string | null;
   readonly updatedAt: Option.Option<DateTime.Utc>;
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;
@@ -40,6 +42,8 @@ export const ForgejoPullRequestSchema = Schema.Struct({
   title: TrimmedNonEmptyString,
   state: Schema.optional(Schema.NullOr(Schema.String)),
   merged: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  closed_at: Schema.optional(Schema.NullOr(Schema.String)),
+  merged_at: Schema.optional(Schema.NullOr(Schema.String)),
   html_url: TrimmedNonEmptyString,
   updated_at: Schema.optional(Schema.OptionFromNullOr(Schema.DateTimeUtcFromString)),
   base: ForgejoPullBranchSchema,
@@ -79,6 +83,8 @@ export function normalizeForgejoPullRequestRecord(
     baseRefName: raw.base.ref,
     headRefName: raw.head.ref,
     state: normalizeState(raw.state, raw.merged ?? null),
+    closedAt: raw.closed_at ?? null,
+    mergedAt: raw.merged_at ?? null,
     updatedAt: raw.updated_at ?? Option.none(),
     ...(isCrossRepository ? { isCrossRepository: true } : {}),
     ...(isCrossRepository && headFullName ? { headRepositoryNameWithOwner: headFullName } : {}),
