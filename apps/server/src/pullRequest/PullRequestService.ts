@@ -10,6 +10,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -1282,6 +1283,80 @@ export const make = Effect.gen(function* () {
   const viewerOf = (project: SupportedProject): Effect.Effect<string | null> =>
     resolveViewers([project], new Map()).pipe(Effect.map(([resolved]) => resolved?.viewer ?? null));
 
+  // Linked badges and settlement only need a summary. Forgejo can supply it
+  // through source control without implementing the full review panel.
+  const forgejoSummary = Effect.fn("PullRequestService.forgejoSummary")(
+    function* (input: PullRequestRef) {
+      const snapshot = yield* projections.getShellSnapshot().pipe(
+        Effect.mapError(
+          (error) =>
+            new PullRequestOperationError({
+              operation: "summary",
+              detail: "The project list could not be read.",
+              cause: error,
+            }),
+        ),
+      );
+      const project = snapshot.projects.find((project) => project.id === input.projectId);
+      const identity = project?.repositoryIdentity;
+      if (
+        !project ||
+        !identity ||
+        (identity.provider !== "forgejo" && identity.provider !== "unknown")
+      ) {
+        return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+      }
+      const repository = repositoryIdentityOf(project);
+      if (
+        repository === null ||
+        repository.toLowerCase() !== input.repository.trim().toLowerCase()
+      ) {
+        return yield* new PullRequestOperationError({
+          operation: "resolveRepository",
+          detail: "The change request does not belong to the selected project.",
+        });
+      }
+      const { remoteName, remoteUrl } = identity.locator;
+      const provider = detectSourceControlProviderFromRemoteUrl(remoteUrl);
+      if (provider === null) {
+        return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+      }
+      const handle = yield* sourceControlProviders.resolveHandle({
+        cwd: project.workspaceRoot,
+        context: { provider, remoteName, remoteUrl },
+      });
+      if (handle.provider.kind !== "forgejo" || handle.context === null) {
+        return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+      }
+      const changeRequest = yield* handle.provider.getChangeRequest({
+        cwd: project.workspaceRoot,
+        context: handle.context,
+        reference: String(input.number),
+      });
+      return {
+        provider: "forgejo",
+        projectId: project.id,
+        repository,
+        number: changeRequest.number,
+        title: changeRequest.title,
+        url: changeRequest.url,
+        state: changeRequest.state,
+        ...(changeRequest.isDraft === true ? { isDraft: true } : {}),
+        headBranch: changeRequest.headRefName,
+        baseBranch: changeRequest.baseRefName,
+        closedAt: changeRequest.closedAt ?? null,
+        mergedAt: changeRequest.mergedAt ?? null,
+        updatedAt: Option.match(changeRequest.updatedAt, {
+          onSome: DateTime.formatIso,
+          onNone: () => changeRequest.mergedAt ?? changeRequest.closedAt ?? project.updatedAt,
+        }),
+      } satisfies PullRequestSummary;
+    },
+    Effect.catchTag("SourceControlProviderError", (error) =>
+      Effect.fail(new PullRequestOperationError({ operation: "summary", detail: error.detail })),
+    ),
+  );
+
   const summaryUncached: PullRequestService["Service"]["summary"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) => {
@@ -1333,6 +1408,9 @@ export const make = Effect.gen(function* () {
           })),
         );
       }),
+      Effect.catchTag("PullRequestUnavailableError", (error) =>
+        error.reason === "provider-unsupported" ? forgejoSummary(input) : Effect.fail(error),
+      ),
     );
 
   const stackUncached: PullRequestService["Service"]["stack"] = (input, options) =>

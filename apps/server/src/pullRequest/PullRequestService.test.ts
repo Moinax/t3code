@@ -3,6 +3,7 @@ import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import * as Persistence from "effect/unstable/persistence/Persistence";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -20,6 +21,8 @@ import type {
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
+import * as ForgejoApi from "../sourceControl/ForgejoApi.ts";
+import * as ForgejoSourceControlProvider from "../sourceControl/ForgejoSourceControlProvider.ts";
 import {
   PullRequestProviderError,
   type ProviderChangeRequest,
@@ -3673,6 +3676,127 @@ it.effect("answers a known pull request immediately while the host refreshes", (
     assert.strictEqual(second.additions, 4);
     yield* Effect.yieldNow;
     assert.strictEqual(calls, 2);
+  }),
+);
+
+for (const kind of ["forgejo", "unknown"]) {
+  it.effect(
+    `reads linked Forgejo summaries for ${kind} project identities without a review provider`,
+    () =>
+      Effect.gen(function* () {
+        let calls = 0;
+        let merged = false;
+        const reference = { projectId: "p1" as ProjectId, repository: "o27/socle", number: 967 };
+        const forgejo = yield* ForgejoSourceControlProvider.make.pipe(
+          Effect.provide(
+            Layer.mock(ForgejoApi.ForgejoApi)({
+              getPullRequest: (input) =>
+                Effect.sync(() => {
+                  calls += 1;
+                  assert.strictEqual(input.cwd, "/socle");
+                  assert.strictEqual(input.reference, "967");
+                  assert.strictEqual(input.context?.remoteUrl, "https://git.o27.io/o27/socle.git");
+                  return {
+                    number: 967,
+                    title: "Fix mail list counts",
+                    url: "https://git.o27.io/o27/socle/pulls/967",
+                    state: merged ? "merged" : "open",
+                    headRefName: "t3code/fix-mail-list-counts",
+                    baseRefName: "main",
+                    updatedAt: Option.some(DateTime.makeUnsafe("2026-09-10T00:00:00Z")),
+                    mergedAt: merged ? "2026-09-09T23:00:00Z" : null,
+                    closedAt: merged ? "2026-09-09T23:00:00Z" : null,
+                  };
+                }),
+            }),
+          ),
+        );
+        const service = yield* makeService({
+          projects: [
+            project({
+              id: "p1",
+              title: "socle",
+              workspaceRoot: "/socle",
+              repository: "o27/socle",
+              provider: kind,
+              host: "git.o27.io",
+            }),
+          ],
+          providers: [],
+          resolveHandle: ({ context }) =>
+            Effect.succeed({
+              provider: forgejo,
+              context: { ...context!, provider: { ...context!.provider, kind: "forgejo" } },
+            }),
+        });
+        const first = yield* service.summary(reference);
+        assert.deepStrictEqual(first, {
+          ...reference,
+          provider: "forgejo",
+          title: "Fix mail list counts",
+          url: "https://git.o27.io/o27/socle/pulls/967",
+          state: "open",
+          headBranch: "t3code/fix-mail-list-counts",
+          baseBranch: "main",
+          updatedAt: "2026-09-10T00:00:00.000Z",
+          closedAt: null,
+          mergedAt: null,
+        });
+        yield* service.summary(reference);
+        assert.strictEqual(calls, 1);
+        merged = true;
+        yield* TestClock.adjust("61 seconds");
+        const settled = yield* service.summary(reference, { recoverTransientFailure: false });
+        assert.strictEqual(settled.state, "merged");
+        assert.strictEqual(settled.mergedAt, "2026-09-09T23:00:00Z");
+        assert.strictEqual(calls, 2);
+        const wrongRepository = yield* service
+          .summary({ ...reference, repository: "other/repo" })
+          .pipe(Effect.flip);
+        assert.strictEqual(wrongRepository._tag, "PullRequestOperationError");
+        assert.strictEqual(calls, 2);
+        const detail = yield* service.detail(reference).pipe(Effect.flip);
+        assert.strictEqual(detail._tag, "PullRequestUnavailableError");
+      }),
+  );
+}
+
+it.effect("reports Forgejo summary failures without exposing nested credential errors", () =>
+  Effect.gen(function* () {
+    const forgejo = yield* ForgejoSourceControlProvider.make.pipe(
+      Effect.provide(
+        Layer.mock(ForgejoApi.ForgejoApi)({
+          getPullRequest: () =>
+            Effect.fail(
+              new ForgejoApi.ForgejoApiError({
+                operation: "getPullRequest",
+                detail: "Forgejo returned HTTP 401.",
+                status: 401,
+                cause: new Error("secret-token"),
+              }),
+            ),
+        }),
+      ),
+    );
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "socle",
+          workspaceRoot: "/socle",
+          repository: "o27/socle",
+          provider: "forgejo",
+          host: "git.o27.io",
+        }),
+      ],
+      providers: [],
+      resolveHandle: ({ context }) => Effect.succeed({ provider: forgejo, context: context! }),
+    });
+    const error = yield* service
+      .summary({ projectId: "p1" as ProjectId, repository: "o27/socle", number: 967 })
+      .pipe(Effect.flip);
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.strictEqual(String(error).includes("secret-token"), false);
   }),
 );
 
