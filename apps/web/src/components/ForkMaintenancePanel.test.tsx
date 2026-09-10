@@ -49,6 +49,31 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+it("updates the fork and offers restart without another local installation", async () => {
+  useForkMaintenance.setState({ state: { ...prepared, runningVersion: prepared.version! } });
+  await act(() => {
+    renderer = create(<ForkMaintenancePanel />);
+  });
+  bridge.mockResolvedValue({ ...prepared, stage: "fetching" });
+  await act(() => button("Update fork").props.onClick());
+  expect(bridge).toHaveBeenLastCalledWith("start");
+  expect(button("Cancel update").props.disabled).toBe(false);
+  const next = {
+    ...prepared,
+    preparedVersion: "next",
+    version: "next",
+    localBuildStatus: "up-to-date",
+  };
+  bridge.mockResolvedValue(next);
+  await act(() => useForkMaintenance.getState().request("status"));
+  expect(button("Up to date").props.disabled).toBe(true);
+  bridge.mockResolvedValue({ ...next, runningVersion: "next" });
+  await act(() => button("Restart").props.onClick());
+  expect(bridge).toHaveBeenLastCalledWith("restart");
+  expect(button("Update fork").props.disabled).toBe(false);
+  expect(button("Up to date").props.disabled).toBe(true);
+});
+
 it("builds local changes while upstream is ready and offers the resulting local version to restart", async () => {
   await act(() => {
     renderer = create(<ForkMaintenancePanel />);

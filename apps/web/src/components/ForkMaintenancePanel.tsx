@@ -39,7 +39,7 @@ export function ForkMaintenancePanel() {
               ? "Preparation stopped"
               : ready
                 ? "Ready to restart"
-                : "Update this desktop"}
+                : "Update your fork"}
         </h2>
         <p className="text-sm text-muted-foreground">
           {current ? "You are running the prepared version." : state.message}
@@ -51,18 +51,18 @@ export function ForkMaintenancePanel() {
             : ""}
         </p>
       </div>
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="space-y-3">
         <div className="flex flex-col items-start gap-3 rounded-md border border-border p-3">
           <div className="flex-1 space-y-1">
-            <h3 className="text-sm font-medium">Upstream update</h3>
+            <h3 className="text-sm font-medium">Update from upstream</h3>
             <p className="text-xs text-muted-foreground">
-              Fetches upstream changes into the published fork. Sol High Fast fixes conflicts and
-              failed checks, then the verified update is built, published and installed.
+              Keeps your fork patches, includes committed local work, and checks and builds the
+              update. Publishes your fork, synchronizes local files and installs the app. Commit any
+              unfinished work before starting.
             </p>
           </div>
           <Button
             size="sm"
-            variant="outline"
             disabled={pending || (running ? local || finishing : upstreamReady ? !!error : ready)}
             onClick={() => void request(upstreamAction)}
           >
@@ -74,52 +74,61 @@ export function ForkMaintenancePanel() {
                 ? "Restart"
                 : failed && !local
                   ? "Retry upstream update"
-                  : "Prepare upstream update"}
+                  : "Update fork"}
           </Button>
         </div>
-        <div className="flex flex-col items-start gap-3 rounded-md border border-border p-3">
-          <div className="flex-1 space-y-1">
-            <h3 className="text-sm font-medium">Local changes</h3>
-            <p className="text-xs text-muted-foreground">
-              Checks, builds and installs your local changes. Restart when you are ready to use
-              them.
-            </p>
-            {localReady ? (
+        <details
+          open={local && (running || ready || failed)}
+          className="rounded-md border border-border p-3"
+        >
+          <summary className="cursor-pointer text-sm text-muted-foreground">
+            Local development
+          </summary>
+          <div className="flex flex-col items-start gap-3 pt-3">
+            <div className="flex-1 space-y-1">
+              <h3 className="text-sm font-medium">Local changes</h3>
               <p className="text-xs text-muted-foreground">
-                {localUpToDate
-                  ? "Your local build is ready to restart."
-                  : "A build is ready to restart. Further edits can be installed afterwards."}
+                Test uncommitted changes in the desktop app without publishing them. This is not
+                needed after updating your fork.
               </p>
-            ) : localUpToDate ? (
-              <p className="text-xs text-muted-foreground">
-                Your local files match the installed build.
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Ask your coding agent to manage commits, publication and branch synchronization.
-              </p>
-            )}
+              {localReady ? (
+                <p className="text-xs text-muted-foreground">
+                  {localUpToDate
+                    ? "Your local build is ready to restart."
+                    : "A build is ready to restart. Further edits can be installed afterwards."}
+                </p>
+              ) : localUpToDate ? (
+                <p className="text-xs text-muted-foreground">
+                  Your local files match the installed build.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  This build does not commit or push your work.
+                </p>
+              )}
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={
+                pending || (running ? !local || finishing : localReady ? !!error : localUpToDate)
+              }
+              onClick={() => void request(localAction)}
+            >
+              {running && local
+                ? finishing
+                  ? "Installing…"
+                  : "Cancel installation"
+                : localReady
+                  ? "Restart"
+                  : localUpToDate
+                    ? "Up to date"
+                    : failed && local
+                      ? "Retry installation"
+                      : "Install local changes"}
+            </Button>
           </div>
-          <Button
-            size="sm"
-            disabled={
-              pending || (running ? !local || finishing : localReady ? !!error : localUpToDate)
-            }
-            onClick={() => void request(localAction)}
-          >
-            {running && local
-              ? finishing
-                ? "Installing…"
-                : "Cancel installation"
-              : localReady
-                ? "Restart"
-                : localUpToDate
-                  ? "Up to date"
-                  : failed && local
-                    ? "Retry installation"
-                    : "Install local changes"}
-          </Button>
-        </div>
+        </details>
       </div>
       {error && (
         <p role="alert" className="text-sm text-destructive">

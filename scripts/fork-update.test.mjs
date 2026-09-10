@@ -162,7 +162,13 @@ NodeTest.test(
     NodeAssert.ok(f.stages.indexOf("publishing") < f.stages.indexOf("installing"));
     NodeAssert.equal(await git(f.config.origin, "rev-parse", "moinax"), f.state().commit);
     await git(f.config.workDir, "merge-base", "--is-ancestor", f.upstreamHead, "HEAD");
-    NodeAssert.equal(await git(f.config.repo, "rev-parse", "HEAD"), f.original);
+    NodeAssert.equal(await git(f.config.repo, "rev-parse", "HEAD"), f.state().commit);
+    NodeAssert.equal(await git(f.config.repo, "rev-parse", "origin/moinax"), f.state().commit);
+    NodeAssert.equal(await git(f.config.repo, "status", "--porcelain"), "");
+    NodeAssert.equal(
+      await compareLocalBuild(f.config, { ...f.state(), workDir: f.config.workDir }),
+      "up-to-date",
+    );
     NodeAssert.equal(await NodeFSP.readFile(f.config.target, "utf8"), "new app");
     NodeAssert.equal(await NodeFSP.readFile(`${f.config.target}.previous`, "utf8"), "old app");
     NodeAssert.equal(f.state().sha256.length, 64);
@@ -478,6 +484,96 @@ NodeTest.test("local commits made during the build stop publication", async (t) 
   await NodeAssert.rejects(prepareUpdate(f.config, run, f.report, f.tools), /local fork changed/);
   NodeAssert.equal(await git(f.config.origin, "rev-parse", "moinax"), f.original);
 });
+
+NodeTest.test("upstream updates include and publish unpublished local commits", async (t) => {
+  const f = await fixture(t);
+  await NodeFSP.writeFile(NodePath.join(f.config.repo, "local-feature"), "keep this patch\n");
+  await git(f.config.repo, "add", ".");
+  await git(f.config.repo, "commit", "-m", "local feature");
+  await prepareUpdate(f.config, f.run, f.report, f.tools);
+  NodeAssert.equal(await git(f.config.repo, "show", "HEAD:local-feature"), "keep this patch");
+  NodeAssert.equal(await git(f.config.origin, "show", "moinax:local-feature"), "keep this patch");
+  NodeAssert.equal(await git(f.config.repo, "show", "HEAD:feature"), "upstream");
+  NodeAssert.equal(
+    await compareLocalBuild(f.config, { ...f.state(), workDir: f.config.workDir }),
+    "up-to-date",
+  );
+});
+
+NodeTest.test(
+  "local commits are built even when upstream and the running app were current",
+  async (t) => {
+    const f = await fixture(t);
+    await git(f.config.repo, "merge", "main", "--no-edit");
+    await git(f.config.repo, "push", "origin", "moinax");
+    const runningCommit = await git(f.config.repo, "rev-parse", "HEAD");
+    await NodeFSP.writeFile(NodePath.join(f.config.repo, "custom"), "new committed work\n");
+    await git(f.config.repo, "commit", "-am", "local change");
+    await prepareUpdate({ ...f.config, runningCommit }, f.run, f.report, f.tools);
+    NodeAssert.equal(f.state().stage, "ready");
+    NodeAssert.equal(await git(f.config.origin, "show", "moinax:custom"), "new committed work");
+  },
+);
+
+NodeTest.test("divergent local commits are preserved without publishing", async (t) => {
+  const f = await fixture(t);
+  await git(f.config.repo, "commit", "--allow-empty", "-m", "published change");
+  await git(f.config.repo, "push", "origin", "moinax");
+  const published = await git(f.config.repo, "rev-parse", "HEAD");
+  await git(f.config.repo, "reset", "--keep", f.original);
+  await git(f.config.repo, "commit", "--allow-empty", "-m", "divergent change");
+  const local = await git(f.config.repo, "rev-parse", "HEAD");
+  await NodeAssert.rejects(prepareUpdate(f.config, f.run, f.report, f.tools), /have diverged/);
+  NodeAssert.equal(await git(f.config.repo, "rev-parse", "HEAD"), local);
+  NodeAssert.equal(await git(f.config.origin, "rev-parse", "moinax"), published);
+});
+
+for (const timing of ["before", "build", "publication"]) {
+  NodeTest.test(`edits ${timing} are preserved and prevent a completed update`, async (t) => {
+    const f = await fixture(t);
+    const file = NodePath.join(f.config.repo, "custom");
+    if (timing === "before") await NodeFSP.writeFile(file, "unfinished work\n");
+    const run = async (command, args, options) => {
+      if (
+        (timing === "build" && command === "vp" && args[1] === "dist:desktop:artifact") ||
+        (timing === "publication" && command === "git" && args[0] === "push")
+      )
+        await NodeFSP.writeFile(file, "unfinished work\n");
+      return f.run(command, args, options);
+    };
+    await NodeAssert.rejects(prepareUpdate(f.config, run, f.report, f.tools), /uncommitted files/);
+    NodeAssert.equal(await NodeFSP.readFile(file, "utf8"), "unfinished work\n");
+    NodeAssert.equal(await git(f.config.repo, "rev-parse", "HEAD"), f.original);
+    NodeAssert.equal(await NodeFSP.readFile(f.config.target, "utf8"), "old app");
+    if (timing !== "publication")
+      NodeAssert.equal(await git(f.config.origin, "rev-parse", "moinax"), f.original);
+  });
+}
+
+NodeTest.test(
+  "an older updater's checkout is synchronized even when the app is already current",
+  async (t) => {
+    const f = await fixture(t);
+    await prepareUpdate(f.config, f.run, f.report, f.tools);
+    const published = JSON.parse(
+      await NodeFSP.readFile(NodePath.join(f.config.stateDir, "published.json"), "utf8"),
+    );
+    await git(f.config.repo, "reset", "--keep", f.original);
+    await prepareUpdate(
+      {
+        ...f.config,
+        published,
+        workDir: `${f.config.workDir}-next`,
+        runningCommit: published.commit,
+      },
+      f.run,
+      f.report,
+      f.tools,
+    );
+    NodeAssert.equal(await git(f.config.repo, "rev-parse", "HEAD"), published.commit);
+    NodeAssert.equal(f.state().stage, "idle");
+  },
+);
 
 NodeTest.test(
   "the next run accepts the unchanged source checkout after its own previous publication",

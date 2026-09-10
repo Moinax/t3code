@@ -10,18 +10,22 @@ can still appear because their commit IDs differ. Checks run every 15 minutes
 while the app is active. **Refresh** checks the count and local update status
 on demand. GitHub request limits may delay the next count check.
 
-In the Linux fork desktop app, **Prepare upstream update** prepares a new version on this
-computer. It uses a separate checkout, preserves your working directory and
-starts from the published fork. Publish local fork commits before starting.
-If you commit more local work during preparation, publication stops so that
-you can reconcile those changes.
+In the Linux fork desktop app, **Update fork** updates the fork and this computer
+together. Commit unfinished work and select the fork branch before starting.
+The update includes unpublished local commits that extend the published fork,
+then rebases your fork patches onto upstream. Divergent local and published
+histories need to be reconciled first.
 
 Sol High Fast handles conflicts and failed checks, with up to two repair
 attempts. After the checks and build pass, the updater pushes the verified
 commit and installs the matching app. **Restart** becomes available when it is
-ready. The previous app stays running until you choose to restart.
+ready. The local checkout and its dependencies are synchronized with the verified
+commit too. No separate local build is needed. The previous app stays running
+until you choose to restart. If you edit files or commit during preparation,
+the update stops rather than overwriting your work. Check the activity for which
+steps completed before retrying.
 
-**Install local changes** builds the current contents of your local fork checkout,
+Under **Local development**, **Install local changes** builds the current contents of your local fork checkout,
 including unpublished commits, uncommitted changes and new files that Git does
 not ignore. It checks and builds a separate snapshot, leaving your working files,
 staging area and branches unchanged. It does not fetch upstream changes, publish
@@ -42,11 +46,9 @@ Local installation has one action: install changes, cancel preparation, restart
 when the local build is ready, or **Up to date** when there is nothing to install.
 A prepared local build is restarted before installing further edits.
 
-Ask your coding agent to synchronize branches, commit and publish local work.
-After an upstream update, have the agent synchronize the local checkout with
-the published fork before making or installing more local changes. Upstream
-preparation keeps the source checkout unchanged; building from its older base
-would otherwise reinstall that older code.
+Local builds are for testing work in progress. They do not commit or publish
+your changes. Commit that work before your next **Update fork** to include it
+in the published fork.
 
 You can inspect the activity, cancel preparation or retry a failed update.
 Publication and installation finish before cancellation is allowed. Closing

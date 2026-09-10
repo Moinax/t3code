@@ -348,12 +348,39 @@ async function checkAndBuild(config, run, report, tools, base) {
 
 export async function prepareUpdate(config, run, report, tools) {
   const git = (args, cwd = config.workDir) => run("git", args, { cwd });
+  const assertLocalReady = async (expectedHead) => {
+    if (
+      (await git(["symbolic-ref", "--short", "HEAD"], config.repo)) !== config.branch ||
+      (await git(["status", "--porcelain", "--untracked-files=all"], config.repo)) ||
+      (expectedHead && (await git(["rev-parse", "HEAD"], config.repo)) !== expectedHead)
+    )
+      throw new Error(
+        "The local fork changed or has uncommitted files. Commit your work and select the fork branch before updating. Nothing will be overwritten.",
+      );
+  };
+  await assertLocalReady();
+  const localHead = await git(["rev-parse", "HEAD"], config.repo);
+  const synchronize = async (commit) => {
+    report({ stage: "publishing", message: "Synchronizing the local checkout and dependencies…" });
+    await assertLocalReady(localHead);
+    await git(["fetch", "--no-tags", config.workDir, commit], config.repo);
+    await assertLocalReady(localHead);
+    await git(
+      ["update-ref", `refs/backups/fork-update/${NodeCrypto.randomUUID()}`, localHead],
+      config.repo,
+    );
+    // --keep refuses conflicting working-file changes; never discard edits with --hard.
+    await git(["reset", "--keep", commit], config.repo);
+    await git(["update-ref", `refs/remotes/origin/${config.branch}`, commit], config.repo);
+    await run(tools.vp, ["install", "--frozen-lockfile"], { cwd: config.repo });
+    await assertLocalReady(commit);
+  };
   report({
     source: "upstream",
     stage: "fetching",
     message: "Fetching the published fork and upstream…",
   });
-  // Start from the published fork. Local unpublished commits must never be silently discarded.
+  // Include unpublished commits when they extend the published fork.
   await run("git", [
     "clone",
     "--reference-if-able",
@@ -366,14 +393,23 @@ export async function prepareUpdate(config, run, report, tools) {
     config.workDir,
   ]);
   const original = await git(["rev-parse", "HEAD"]);
-  const localHead = await git(["rev-parse", `refs/heads/${config.branch}`], config.repo);
+  await git(["fetch", "--no-tags", config.repo, localHead]);
+  const ancestor = async (base, head) => {
+    const bases = await git(["merge-base", "--all", base, head]);
+    return bases.split("\n").includes(base);
+  };
   if (
     localHead !== original &&
+    !(await ancestor(original, localHead)) &&
+    !(await ancestor(localHead, original)) &&
     !(config.published?.commit === original && config.published?.sourceCommit === localHead)
   )
     throw new Error(
-      "The local fork has unpublished or divergent commits. Synchronize and publish them before updating.",
+      "The local and published fork have diverged. Reconcile their commits before updating.",
     );
+  if (localHead !== original && (await ancestor(original, localHead)))
+    await git(["reset", "--keep", localHead]);
+  const base = await git(["rev-parse", "HEAD"]);
   await git(["config", "user.name", await git(["config", "user.name"], config.repo)]);
   await git(["config", "user.email", await git(["config", "user.email"], config.repo)]);
   // The runner owns publication. An agent's ordinary git push cannot publish this checkout.
@@ -382,8 +418,14 @@ export async function prepareUpdate(config, run, report, tools) {
   await git(["fetch", "upstream", "main"]);
   const upstream = await git(["rev-parse", "refs/remotes/upstream/main"]);
   const missing = await git(["rev-list", "--count", `${original}..${upstream}`]);
-  if (missing === "0" && config.runningCommit && original.startsWith(config.runningCommit)) {
-    report({ stage: "idle", message: "The running app is up to date." });
+  if (
+    missing === "0" &&
+    base === original &&
+    config.runningCommit &&
+    original.startsWith(config.runningCommit)
+  ) {
+    await synchronize(original);
+    report({ stage: "idle", message: "The fork, local checkout and running app are up to date." });
     return;
   }
   let attempt = 0;
@@ -445,10 +487,7 @@ export async function prepareUpdate(config, run, report, tools) {
     }
   }
   // A developer can keep working during the build, but a new local commit needs reconciliation.
-  if ((await git(["rev-parse", `refs/heads/${config.branch}`], config.repo)) !== localHead)
-    throw new Error(
-      "The local fork changed during the update. Synchronize it before retrying. Nothing was pushed.",
-    );
+  await assertLocalReady(localHead);
   const sha256 = await digest(artifact);
   report({ stage: "publishing", message: "Publishing the verified commit…" });
   await git([
@@ -462,6 +501,14 @@ export async function prepareUpdate(config, run, report, tools) {
     JSON.stringify({ commit, sourceCommit: localHead }),
     { mode: 0o600 },
   );
+  try {
+    await synchronize(commit);
+  } catch (error) {
+    throw new Error(
+      `The verified update was published, but local synchronization failed. The installed app is unchanged. ${error.message}`,
+      { cause: error },
+    );
+  }
   report({ stage: "installing", message: "Installing the prepared AppImage…" });
   await installArtifact(artifact, config.target);
   const installed = await NodeFSP.stat(config.target);
@@ -472,7 +519,8 @@ export async function prepareUpdate(config, run, report, tools) {
     commit,
     version,
     sha256,
-    message: "Update installed. Restart when you are ready.",
+    message:
+      "Fork published, local checkout synchronized and app installed. Restart when you are ready.",
   });
 }
 
