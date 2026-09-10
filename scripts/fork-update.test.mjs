@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import {
+  updaterPath,
   commandRunner,
   prepareUpdate,
   prepareLocalUpdate,
@@ -19,6 +20,36 @@ import {
   readUpdateLog,
 } from "./fork-update.mjs";
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
+
+NodeTest.test(
+  "updater commands use persistent tools instead of the desktop AppImage",
+  async (t) => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3fork-path-"));
+    t.after(() => NodeFSP.rm(root, { recursive: true, force: true }));
+    const mount = NodePath.join(root, ".mount_t3-code-old", "usr", "bin");
+    const persistent = NodePath.join(root, "bin");
+    for (const [directory, value] of [
+      [mount, "appimage"],
+      [persistent, "system"],
+    ]) {
+      await NodeFSP.mkdir(directory, { recursive: true });
+      await NodeFSP.writeFile(NodePath.join(directory, "probe"), `#!/bin/sh\necho ${value}\n`, {
+        mode: 0o755,
+      });
+    }
+    const path = updaterPath([mount, persistent, "/usr/bin", "/bin"].join(NodePath.delimiter));
+    NodeAssert.equal(
+      (await exec("probe", [], { env: { ...process.env, PATH: path } })).stdout.trim(),
+      "system",
+    );
+    await NodeFSP.rm(NodePath.dirname(NodePath.dirname(mount)), { recursive: true });
+    NodeAssert.equal(
+      (await exec("probe", [], { env: { ...process.env, PATH: path } })).stdout.trim(),
+      "system",
+    );
+    NodeAssert.equal(updaterPath("/custom/bin:/usr/bin:/bin"), "/custom/bin:/usr/bin:/bin");
+  },
+);
 
 NodeTest.test(
   "activity tail preserves ANSI colors and discards a truncated first line",

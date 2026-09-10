@@ -12,6 +12,14 @@ import * as NodeURL from "node:url";
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
 const terminal = new Set(["idle", "ready", "error", "cancelled"]);
 const unit = "t3fork-update.service";
+export function updaterPath(path = process.env.PATH || "/usr/bin:/bin") {
+  // AppImage mounts disappear when the desktop exits. A stale FUSE entry makes
+  // execvp fail with ENOTCONN before it reaches the system tools later in PATH.
+  return path
+    .split(NodePath.delimiter)
+    .filter((entry) => !entry.split(NodePath.sep).some((part) => part.startsWith(".mount_")))
+    .join(NodePath.delimiter);
+}
 export const defaults = () => ({
   repo: process.env.T3CODE_REPO || NodePath.join(NodeOS.homedir(), "Projects/labs/t3code"),
   stateDir: NodePath.join(NodeOS.homedir(), ".local/state/t3fork"),
@@ -560,6 +568,7 @@ async function findTool(name, candidates = []) {
   throw new Error(`${name} is not installed.`);
 }
 async function main() {
+  process.env.PATH = updaterPath();
   const config = defaults();
   NodeFS.mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
   const action = process.argv[2] || "status";
