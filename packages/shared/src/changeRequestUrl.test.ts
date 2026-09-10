@@ -111,6 +111,7 @@ describe("siblingPullRequestUrl", () => {
       "https://bitbucket.org/acme/web/pull-requests/42",
       "https://bitbucket.org/acme/web/pull-requests/43",
     ],
+    ["https://codeberg.org/acme/web/pulls/42/files", "https://codeberg.org/acme/web/pulls/43"],
     [
       "https://dev.azure.com/acme/project/_git/web/pullrequest/42?view=files",
       "https://dev.azure.com/acme/project/_git/web/pullrequest/43",
@@ -125,6 +126,16 @@ describe("siblingPullRequestUrl", () => {
 });
 
 describe("changeRequestUrlFor", () => {
+  it("builds a Forgejo pull request URL", () => {
+    const url = changeRequestUrlFor("forgejo", "codeberg.org", "acme/web", 42);
+    expect(url).toBe("https://codeberg.org/acme/web/pulls/42");
+    expect(parseChangeRequestUrl(url!)).toEqual({
+      host: "codeberg.org",
+      repository: "acme/web",
+      number: 42,
+    });
+  });
+
   it.each([
     ["ssh.dev.azure.com", "v3/org/project/web"],
     ["vs-ssh.visualstudio.com", "v3/org/project/web"],
