@@ -66,14 +66,14 @@ type AntigravityTextRuntime = Pick<
 export interface AntigravityTextGenerationOptions {
   readonly profileDirectory: string;
   /** Model the provider default alias selects, when the account offers it. */
-  readonly defaultModel?: Effect.Effect<string | undefined>;
+  readonly defaultModel?: Effect.Effect<string | undefined, never>;
   /** Uses the instance's personal Google login, with no injected MCP servers or client tools. */
   readonly makeRuntime: (
     cwd: string,
   ) => Effect.Effect<AntigravityTextRuntime, AcpError | ProviderSetupError, Scope.Scope>;
   /** Registers the whole helper so sign-out can stop it before clearing credentials. */
   readonly withProcess: <A, E, R>(
-    stop: Effect.Effect<void>,
+    stop: Effect.Effect<void, never>,
     task: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | ProviderSetupError, R | Scope.Scope>;
 }
@@ -235,10 +235,12 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
               });
             }
             yield* runtime.setMode("default");
+            const defaultModel =
+              options.defaultModel === undefined ? undefined : yield* options.defaultModel;
             yield* applyAntigravityAcpModelSelection({
               runtime,
               model: input.modelSelection.model,
-              defaultModel: yield* options.defaultModel ?? Effect.succeed(undefined),
+              defaultModel,
               mapError: (cause) =>
                 new TextGenerationError({
                   operation,

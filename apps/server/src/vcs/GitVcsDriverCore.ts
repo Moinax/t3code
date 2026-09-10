@@ -8,7 +8,6 @@ import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
@@ -842,17 +841,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
       return yield* execution.pipe(
         Effect.timeoutOption(timeoutMs),
-        Effect.flatMap((result) =>
-          Option.match(result, {
-            onNone: () =>
-              Effect.fail(
-                new GitCommandError({
-                  ...gitCommandContext(commandInput),
-                  detail: "Git command timed out.",
-                }),
-              ),
-            onSome: Effect.succeed,
-          }),
+        Effect.flatMap(
+          Effect.fromOption(
+            () =>
+              new GitCommandError({
+                ...gitCommandContext(commandInput),
+                detail: "Git command timed out.",
+              }),
+          ),
         ),
       );
     },
@@ -897,11 +893,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         : {}),
       ...(options.progress ? { progress: options.progress } : {}),
     }).pipe(
-      Effect.flatMap((result) => {
-        if (options.allowNonZeroExit || result.exitCode === 0) {
-          return Effect.succeed(result);
-        }
-        return Effect.fail(
+      Effect.filterOrFail(
+        (result) => options.allowNonZeroExit || result.exitCode === 0,
+        (result) =>
           new GitCommandError({
             ...gitCommandContext({ operation, cwd, args }),
             detail: options.fallbackErrorDetail ?? "Git command exited with a non-zero status.",
@@ -909,8 +903,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             stdoutLength: result.stdout.length,
             stderrLength: result.stderr.length,
           }),
-        );
-      }),
+      ),
     );
 
   const executeGitWithStableDiagnostics = (

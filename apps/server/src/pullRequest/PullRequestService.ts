@@ -1282,44 +1282,49 @@ export const make = Effect.gen(function* () {
   const viewerOf = (project: SupportedProject): Effect.Effect<string | null> =>
     resolveViewers([project], new Map()).pipe(Effect.map(([resolved]) => resolved?.viewer ?? null));
 
+  const requireForgejoProject = Effect.fn("PullRequestService.requireForgejoProject")(function* (
+    input: PullRequestRef,
+  ) {
+    const snapshot = yield* projections.getShellSnapshot().pipe(
+      Effect.mapError(
+        (error) =>
+          new PullRequestOperationError({
+            operation: "summary",
+            detail: "The project list could not be read.",
+            cause: error,
+          }),
+      ),
+    );
+    const project = snapshot.projects.find((project) => project.id === input.projectId);
+    const identity = project?.repositoryIdentity;
+    if (
+      !project ||
+      !identity ||
+      (identity.provider !== "forgejo" && identity.provider !== "unknown")
+    ) {
+      return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+    }
+    const repository = sourceControlRepositorySelector(identity);
+    if (repository === null || repository.toLowerCase() !== input.repository.trim().toLowerCase()) {
+      return yield* new PullRequestOperationError({
+        operation: "resolveRepository",
+        detail: "The change request does not belong to the selected project.",
+      });
+    }
+    const { remoteUrl } = identity.locator;
+    const provider = detectSourceControlProviderFromRemoteUrl(remoteUrl);
+    if (provider === null) {
+      return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+    }
+    return { identity, project, provider, repository };
+  });
+
   // Linked badges and settlement only need a summary. Forgejo can supply it
   // through source control without implementing the full review panel.
   const forgejoSummary = Effect.fn("PullRequestService.forgejoSummary")(
     function* (input: PullRequestRef) {
-      const snapshot = yield* projections.getShellSnapshot().pipe(
-        Effect.mapError(
-          (error) =>
-            new PullRequestOperationError({
-              operation: "summary",
-              detail: "The project list could not be read.",
-              cause: error,
-            }),
-        ),
-      );
-      const project = snapshot.projects.find((project) => project.id === input.projectId);
-      const identity = project?.repositoryIdentity;
-      if (
-        !project ||
-        !identity ||
-        (identity.provider !== "forgejo" && identity.provider !== "unknown")
-      ) {
-        return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
-      }
-      const repository = repositoryIdentityOf(project);
-      if (
-        repository === null ||
-        repository.toLowerCase() !== input.repository.trim().toLowerCase()
-      ) {
-        return yield* new PullRequestOperationError({
-          operation: "resolveRepository",
-          detail: "The change request does not belong to the selected project.",
-        });
-      }
+      const { identity, project, provider, repository } = yield* requireForgejoProject(input);
       const { remoteName, remoteUrl } = identity.locator;
-      const provider = detectSourceControlProviderFromRemoteUrl(remoteUrl);
-      if (provider === null) {
-        return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
-      }
       const handle = yield* sourceControlProviders.resolveHandle({
         cwd: project.workspaceRoot,
         context: { provider, remoteName, remoteUrl },
@@ -1407,9 +1412,6 @@ export const make = Effect.gen(function* () {
           })),
         );
       }),
-      Effect.catchTag("PullRequestUnavailableError", (error) =>
-        error.reason === "provider-unsupported" ? forgejoSummary(input) : Effect.fail(error),
-      ),
     );
 
   const stackUncached: PullRequestService["Service"]["stack"] = (input, options) =>
@@ -2417,15 +2419,31 @@ export const make = Effect.gen(function* () {
     operation: string,
     codec: Schema.Codec<A, string>,
     read: Effect.Effect<A, PullRequestError>,
+    route?: {
+      readonly provider: SourceControlProviderKind;
+      readonly host: string;
+      readonly repository: string;
+      readonly projectId: string;
+      readonly workspaceRoot: string;
+    },
   ) {
-    const project = yield* requireProject(input);
+    if (route === undefined) {
+      const project = yield* requireProject(input);
+      route = {
+        provider: project.api.kind,
+        host: project.host,
+        repository: project.repository,
+        projectId: project.project.id,
+        workspaceRoot: project.project.workspaceRoot,
+      };
+    }
     const key = [
       operation,
-      project.api.kind,
-      project.host.toLowerCase(),
-      project.repository.toLowerCase(),
-      project.project.id,
-      project.project.workspaceRoot,
+      route.provider,
+      route.host.toLowerCase(),
+      route.repository.toLowerCase(),
+      route.projectId,
+      route.workspaceRoot,
       String(input.number),
     ]
       .map(encodeURIComponent)
@@ -2446,7 +2464,7 @@ export const make = Effect.gen(function* () {
       ),
     );
     const payload = yield* readCache.get(key, encodedRead);
-    const decoded = yield* Schema.decodeUnknownEffect(codec)(payload).pipe(Effect.option);
+    const decoded = yield* Schema.decodeEffect(codec)(payload).pipe(Effect.option);
     return Option.isSome(decoded) ? decoded.value : yield* lookup;
   });
   const summaryCodec = Schema.fromJsonString(PullRequestSummary);
@@ -2454,7 +2472,23 @@ export const make = Effect.gen(function* () {
 
   const summary: PullRequestService["Service"]["summary"] = (input, options) => {
     const key = refCacheKey(input);
-    const cached = persistedRead(input, "summary", summaryCodec, summaryUncached(input));
+    const cached = persistedRead(input, "summary", summaryCodec, summaryUncached(input)).pipe(
+      Effect.catchTag("PullRequestUnavailableError", (error) =>
+        error.reason === "provider-unsupported"
+          ? requireForgejoProject(input).pipe(
+              Effect.flatMap(({ identity, project, repository }) =>
+                persistedRead(input, "summary", summaryCodec, forgejoSummary(input), {
+                  provider: "forgejo",
+                  host: pullRequestHostOf(identity, "forgejo"),
+                  repository,
+                  projectId: project.id,
+                  workspaceRoot: project.workspaceRoot,
+                }),
+              ),
+            )
+          : Effect.fail(error),
+      ),
+    );
     const held = lastGoodSummary.peek(key);
     return held !== undefined &&
       (options?.recoverTransientFailure !== false || held.state === "merged")
