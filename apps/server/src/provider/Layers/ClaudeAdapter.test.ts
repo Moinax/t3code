@@ -71,6 +71,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setModelCalls: Array<string | undefined> = [];
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
+  public onNext: (() => void) | undefined;
   public closeCalls = 0;
   public closeError: unknown | undefined;
 
@@ -131,6 +132,9 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   [Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
     return {
       next: () => {
+        const onNext = this.onNext;
+        this.onNext = undefined;
+        onNext?.();
         if (this.queue.length > 0) {
           const value = this.queue.shift();
           if (value) {
@@ -3520,11 +3524,6 @@ describe("ClaudeAdapterLive", () => {
       const adapter = yield* ClaudeAdapter;
       const firstTurnSettled = yield* Deferred.make<void>();
       const completedFiber = yield* adapter.streamEvents.pipe(
-        Stream.tap((event) =>
-          event.type === "session.state.changed" && event.payload.reason === "api_retry:1/2"
-            ? Deferred.succeed(firstTurnSettled, undefined).pipe(Effect.asVoid)
-            : Effect.void,
-        ),
         Stream.filter((event) => event.type === "turn.completed"),
         Stream.take(2),
         Stream.runCollect,
@@ -3541,6 +3540,10 @@ describe("ClaudeAdapterLive", () => {
         input: "first turn",
         attachments: [],
       });
+      // The SDK reader requests the next message after settling the previous turn.
+      harness.query.onNext = () => {
+        Deferred.doneUnsafe(firstTurnSettled, Effect.void);
+      };
       harness.query.emit({
         type: "result",
         subtype: "success",
@@ -3569,17 +3572,6 @@ describe("ClaudeAdapterLive", () => {
             maxOutputTokens: 64_000,
           },
         },
-      } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "system",
-        subtype: "api_retry",
-        attempt: 1,
-        max_retries: 2,
-        retry_delay_ms: 1,
-        error_status: 502,
-        error: { type: "api_error" },
-        session_id: "sdk-session-consecutive-usage",
-        uuid: "consecutive-usage-barrier",
       } as unknown as SDKMessage);
       yield* Deferred.await(firstTurnSettled);
 
@@ -4328,6 +4320,13 @@ describe("ClaudeAdapterLive", () => {
         provider: ProviderDriverKind.make("claudeAgent"),
         runtimeMode: "full-access",
       });
+      // status/api_retry heartbeats only report while a turn owns them, so
+      // the whole batch runs inside one.
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hello",
+        attachments: [],
+      });
 
       // Undeclared wire-only roster snapshot + every typed UX-internal
       // subtype and top-level type consumed silently: none may surface as
@@ -4534,26 +4533,20 @@ describe("ClaudeAdapterLive", () => {
       const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
         Effect.gen(function* () {
           runtimeEvents.push(event);
-          if (
-            receipt &&
-            event.type === "session.state.changed" &&
-            event.payload.reason === "api_retry:1/1"
-          ) {
+          if (receipt && event.type === "files.persisted") {
             yield* Deferred.succeed(receipt, undefined);
           }
         }),
       ).pipe(Effect.forkChild);
       const drainSdkMessages = Effect.gen(function* () {
         receipt = yield* Deferred.make<void>();
-        // The heartbeat follows queued SDK messages without adding a warning.
+        // An empty file receipt drains earlier messages even between turns,
+        // when busy heartbeats are deliberately suppressed.
         query.emit({
           type: "system",
-          subtype: "api_retry",
-          attempt: 1,
-          max_retries: 1,
-          retry_delay_ms: 0,
-          error_status: 429,
-          error: { type: "rate_limit_error" },
+          subtype: "files_persisted",
+          files: [],
+          failed: [],
           session_id: "sdk-session-limit",
           uuid: "usage-limit-drain",
         } as unknown as SDKMessage);
@@ -5043,6 +5036,90 @@ describe("ClaudeAdapterLive", () => {
         runtimeEvents.filter((event) => event.type === "account.rate-limits.updated").length,
         1,
       );
+      runtimeEventsFiber.interruptUnsafe();
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("drops status and api_retry heartbeats that arrive with no turn to own them", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => runtimeEvents.push(event)),
+      ).pipe(Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "/compact",
+        attachments: [],
+      });
+
+      // The sequence a /compact produces when compaction outlives its turn:
+      // an in-turn compacting status, the turn's result, then the
+      // post-compaction status clear and a transport retry landing on a
+      // thread whose turn already completed. Both heartbeats map to busy
+      // states that only a turn can clear, so reporting either would leave
+      // the session at running with no active turn forever.
+      harness.query.emit({
+        type: "system",
+        subtype: "status",
+        status: "compacting",
+        session_id: "sdk-session-1",
+        uuid: "status-compacting",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        num_turns: 0,
+        session_id: "sdk-session-1",
+        uuid: "compact-result",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "status",
+        status: null,
+        compact_result: "success",
+        session_id: "sdk-session-1",
+        uuid: "status-clear",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "api_retry",
+        attempt: 3,
+        max_retries: 10,
+        retry_delay_ms: 1000,
+        error_status: 502,
+        error: { type: "api_error" },
+        session_id: "sdk-session-1",
+        uuid: "post-turn-retry",
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      const heartbeats = runtimeEvents
+        .filter((event) => event.type === "session.state.changed")
+        .map((event) =>
+          event.type === "session.state.changed"
+            ? `${event.payload.state}:${event.payload.reason ?? ""}`
+            : "",
+        )
+        .filter((entry) => entry.includes(":status:") || entry.includes(":api_retry:"));
+      // Only the in-turn compacting heartbeat reports; the post-turn pair is
+      // dropped, leaving the turn completion's ready state in charge.
+      assert.deepEqual(heartbeats, ["waiting:status:compacting"]);
+      const turnCompleted = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(turnCompleted?.type, "turn.completed");
       runtimeEventsFiber.interruptUnsafe();
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
