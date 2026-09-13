@@ -39,6 +39,32 @@ export function resolveThreadRouteRenderState(input: {
   return input.serverThreadShellExists ? "loading" : "missing";
 }
 
+/**
+ * What the route should do about a thread it cannot render.
+ *
+ * `after-sync-grace` is the one that is not obvious: a thread created out of
+ * band — the vicinae picker, the mobile app — is deep-linked the instant the
+ * server accepts the command, and its shell reaches this client on the live
+ * stream a moment later. On that first render the id is indistinguishable from
+ * one that never existed, and leaving immediately dropped the user on a draft
+ * in whichever project was most recently touched. A deleted thread is the
+ * opposite case: it is gone for good, and waiting only leaves the pane blank.
+ */
+export type ThreadRouteExit = "stay" | "immediate" | "after-sync-grace";
+
+export function resolveThreadRouteExit(input: {
+  renderState: ThreadRouteRenderState;
+  environmentHasAnyThreads: boolean;
+  serverThreadDeleted: boolean;
+}): ThreadRouteExit {
+  // `missing` already implies bootstrap is complete — before that the state is
+  // `loading` — so there is nothing else to wait for here.
+  if (input.renderState !== "missing" || !input.environmentHasAnyThreads) {
+    return "stay";
+  }
+  return input.serverThreadDeleted ? "immediate" : "after-sync-grace";
+}
+
 export function buildThreadRouteParams(ref: ScopedThreadRef): {
   environmentId: EnvironmentId;
   threadId: ThreadId;
