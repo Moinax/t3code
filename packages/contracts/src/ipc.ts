@@ -1,3 +1,4 @@
+import type { ForkUpdateAction, ForkUpdateState } from "./forkUpdate.ts";
 import * as Schema from "effect/Schema";
 
 import {
@@ -1134,6 +1135,7 @@ export type DesktopDeepLinkTarget = {
 };
 
 export interface DesktopBridge {
+  forkUpdate?: (action: ForkUpdateAction) => Promise<ForkUpdateState>;
   getAppBranding: () => DesktopAppBranding | null;
   /** Absolute path of a dropped or picked file; absent on desktop builds predating it. */
   getPathForFile?: (file: File) => string;

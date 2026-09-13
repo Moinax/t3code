@@ -1,10 +1,19 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import { getForkUpdatePreparedVersion, isForkUpdateRunning } from "@t3tools/contracts";
+import {
+  ArrowLeftIcon,
+  ChartNoAxesColumnIcon,
+  GitCommitHorizontalIcon,
+  RefreshCwIcon,
+  SettingsIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
+import { useForkMaintenance, useForkMaintenanceMonitor } from "../../state/forkMaintenance";
+import { useForkUpdates } from "../../state/forkUpdates";
 import { useEnvironments } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
@@ -27,6 +36,7 @@ import { UsageLimitsHoverCard } from "../usage/UsageLimits";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
+import { SidebarForkUpdatePill } from "./SidebarForkUpdatePill";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
@@ -118,7 +128,12 @@ function SidebarUtilityItem({
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            <SidebarMenuButton
+              aria-label={label}
+              onClick={onClick}
+              size="icon"
+              className="relative overflow-visible"
+            >
               {icon}
             </SidebarMenuButton>
           }
@@ -129,7 +144,69 @@ function SidebarUtilityItem({
   );
 }
 
+function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
+  const { data, error, loading } = useForkUpdates();
+  const maintenance = useForkMaintenance();
+  const job = maintenance.state;
+  const running = job ? isForkUpdateRunning(job.stage) : false;
+  const preparedVersion = job ? getForkUpdatePreparedVersion(job) : null;
+  const ready = !running && !!preparedVersion && preparedVersion !== job?.runningVersion;
+  const failed = job?.stage === "error" || !!maintenance.error;
+  const label = ready
+    ? `${job?.preparedSource === "local" ? "Local build" : "Fork update"} ready: restart from Fork updates`
+    : running
+      ? `Fork update: ${job?.message}`
+      : failed
+        ? "Fork update needs attention"
+        : error
+          ? `Fork updates: check failed${data ? `, last count ${data.count}` : ""}`
+          : data
+            ? `Fork updates: ${data.count} upstream commits missing`
+            : loading
+              ? "Fork updates: checking GitHub"
+              : "Fork updates";
+  return (
+    <SidebarUtilityItem
+      label={label}
+      onClick={onClick}
+      icon={
+        <>
+          {running ? (
+            <RefreshCwIcon aria-hidden="true" className="motion-safe:animate-spin" />
+          ) : (
+            <GitCommitHorizontalIcon />
+          )}
+          {!running && (
+            <span
+              className={cn(
+                "absolute -right-1 -top-1 min-w-4 rounded-full px-1 text-center text-[9px] font-semibold leading-4 tabular-nums",
+                ready
+                  ? "bg-emerald-600 text-white"
+                  : failed || error
+                    ? "bg-amber-500 text-black"
+                    : "bg-muted text-foreground",
+              )}
+            >
+              {ready
+                ? "✓"
+                : failed || error
+                  ? "!"
+                  : data
+                    ? data.count > 999
+                      ? "999+"
+                      : data.count
+                    : "…"}
+            </span>
+          )}
+        </>
+      }
+    />
+  );
+}
+
 export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
+  useForkMaintenanceMonitor();
+  const forkUpdateAvailable = useForkMaintenance((state) => state.state?.available);
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -202,7 +279,13 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           />
         </>
       )}
-      <SidebarUpdatePill />
+      <ForkUpdatesUtilityItem
+        onClick={() => {
+          closeMobileSidebar();
+          void navigate({ to: "/fork-updates" });
+        }}
+      />
+      {!forkUpdateAvailable && <SidebarUpdatePill />}
     </SidebarMenu>
   );
 });
@@ -211,6 +294,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
     <SidebarFooter>
       <SidebarThreadUndoNotice />
+      <SidebarForkUpdatePill />
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />

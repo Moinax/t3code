@@ -10,18 +10,9 @@ import {
   getProviderUpdateSidebarPillView,
   type ProviderUpdateSidebarPillView,
 } from "../ProviderUpdateLaunchNotification.logic";
+import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-
-const PROVIDER_UPDATE_PILL_STYLES = {
-  loading:
-    "bg-sidebar-control-surface text-sidebar-foreground group-has-[button[data-provider-update-main]:hover]/provider-update:bg-sidebar-row-hover",
-  success:
-    "bg-sidebar-control-surface text-sidebar-foreground group-has-[button[data-provider-update-main]:hover]/provider-update:bg-sidebar-row-hover",
-  warning:
-    "bg-warning/12 text-warning group-has-[button[data-provider-update-main]:hover]/provider-update:bg-warning/18",
-  error:
-    "bg-destructive/12 text-destructive group-has-[button[data-provider-update-main]:hover]/provider-update:bg-destructive/18",
-} as const;
+import { SidebarUpdateNotice } from "./SidebarUpdateNotice";
 
 const PROVIDER_UPDATE_PILL_PROGRESS_STYLES = {
   success: "bg-foreground/8",
@@ -124,10 +115,9 @@ export function SidebarProviderUpdatePill() {
   }
 
   return (
-    <div
-      className={`group/provider-update relative flex min-h-7 w-full shrink-0 items-center overflow-hidden rounded-lg text-2xs leading-4 font-medium transform-gpu transition-all duration-180 ease-drawer will-change-transform ${
-        PROVIDER_UPDATE_PILL_STYLES[displayedView.tone]
-      } ${
+    <SidebarUpdateNotice
+      tone={displayedView.tone}
+      className={`transform-gpu transition-all duration-180 ease-drawer will-change-transform ${
         exitingKey === displayedView.key
           ? "pointer-events-none translate-y-1.5 opacity-0"
           : "translate-y-0 opacity-100"
@@ -169,8 +159,7 @@ export function SidebarProviderUpdatePill() {
             <button
               type="button"
               aria-label={displayedView.description}
-              data-provider-update-main
-              className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
+              className="sidebar-update-main relative z-[1] flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
               onClick={openProviderSettings}
             >
               {displayedView.tone === "loading" ? (
@@ -192,19 +181,20 @@ export function SidebarProviderUpdatePill() {
         <Tooltip>
           <TooltipTrigger
             render={
-              <button
-                type="button"
+              <Button
+                size="icon-micro"
+                variant="ghost"
                 aria-label="Dismiss provider update notice"
-                className="relative z-[1] mr-1 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md opacity-70 outline-none hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring"
+                className="relative z-[1] mr-1 [--control-icon-color:currentColor] rounded-md text-inherit opacity-70 hover:bg-transparent hover:opacity-100"
                 onClick={() => startExit(displayedView.key, null, displayedView.key)}
               >
                 <XIcon className="size-3.5 shrink-0" />
-              </button>
+              </Button>
             }
           />
           <TooltipPopup side="top">Dismiss until provider status changes</TooltipPopup>
         </Tooltip>
       )}
-    </div>
+    </SidebarUpdateNotice>
   );
 }
