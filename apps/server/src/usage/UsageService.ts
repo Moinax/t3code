@@ -93,7 +93,7 @@ const decodeClaudeSettings = Schema.decodeOption(ClaudeSettings);
 
 /** On-disk shape of the rate snapshot. */
 const RatesCacheFile = Schema.Struct({
-  fetchedAtMs: Schema.Number,
+  fetchedAtMs: Schema.Finite,
   document: Schema.Unknown,
 });
 const decodeRatesCache = Schema.decodeUnknownEffect(

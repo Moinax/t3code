@@ -52,7 +52,7 @@ interface AuthFlow {
 }
 
 interface OwnedProcess {
-  readonly stop: Effect.Effect<void>;
+  readonly stop: Effect.Effect<void, never>;
   startup: Fiber.Fiber<unknown, unknown> | undefined;
 }
 
@@ -60,7 +60,7 @@ export interface AntigravityAuth {
   readonly controller: ProviderAuthController;
   /** Tracks startup and the process scope so sign-out cannot leave cached credentials in memory. */
   readonly withProcess: <A, E, R>(
-    stop: Effect.Effect<void>,
+    stop: Effect.Effect<void, never>,
     task: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | ProviderSetupError, R | Scope.Scope>;
 }

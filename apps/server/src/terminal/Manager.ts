@@ -111,7 +111,7 @@ class TerminalSubprocessCheckError extends Schema.TaggedError<TerminalSubprocess
   {
     cause: Schema.optional(Schema.Defect()),
     command: Schema.Literals(["powershell", "ps", "resource-monitor"]),
-    exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
+    exitCode: Schema.optional(Schema.NullOr(Schema.Finite)),
     timedOut: Schema.optional(Schema.Boolean),
     stdoutTruncated: Schema.optional(Schema.Boolean),
   },
@@ -133,7 +133,7 @@ class TerminalProcessSignalError extends Schema.TaggedError<TerminalProcessSigna
   {
     cause: Schema.optional(Schema.Defect()),
     signal: Schema.Literals(["SIGTERM", "SIGKILL"]),
-    terminalPid: Schema.Number,
+    terminalPid: Schema.Finite,
   },
 ) {
   override get message(): string {
