@@ -969,7 +969,7 @@ export const make = Effect.gen(function* () {
   ) {
     yield* Effect.annotateCurrentSpan({ environmentId: target.environmentId });
     const existingWindow = yield* focusedMainWindow;
-    if (Option.isNone(existingWindow) && !(yield* Ref.get(backendReadyRef))) {
+    if (Option.isNone(existingWindow) && (yield* waitingForBackend)) {
       yield* Ref.set(pendingDeepLinkRef, Option.some(target));
       yield* logWindowInfo("deep link held until backend is ready", { kind: target.kind });
       return;
