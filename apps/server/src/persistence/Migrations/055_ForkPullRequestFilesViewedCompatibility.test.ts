@@ -4,27 +4,31 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 import { runMigrations } from "../Migrations.ts";
-import migrateMessageContext from "./053_ForkMessageContextCompatibility.ts";
+import repairForkHistory from "./054_ForkTitleStateCompatibility.ts";
 
-it.effect("repairs a fork database that recorded migrations through 53", () =>
+it.effect("repairs a fork database that recorded migrations through 54", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
     yield* runMigrations({ toMigrationInclusive: 50 });
-    yield* migrateMessageContext;
+    yield* repairForkHistory;
     yield* sql`
       INSERT INTO effect_sql_migrations (migration_id, name)
       VALUES
         (51, 'ForkMigrationCompatibility'),
         (52, 'ProjectionThreadsActiveOrderKeyCompatibility'),
-        (53, 'ForkMessageContextCompatibility')
+        (53, 'ForkMessageContextCompatibility'),
+        (54, 'ForkTitleStateCompatibility')
     `;
 
     const applied = yield* runMigrations();
-    assert.deepStrictEqual(applied, [
-      [54, "ProjectionThreadsAutoSettleDisabledAt"],
-      [55, "ForkPullRequestFilesViewedCompatibility"],
-    ]);
+    assert.deepStrictEqual(applied, [[55, "ForkPullRequestFilesViewedCompatibility"]]);
+
+    const viewedTables = yield* sql<{ readonly name: string }>`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = 'pull_request_files_viewed'
+    `;
+    assert.strictEqual(viewedTables.length, 1);
 
     const threadColumns = yield* sql<{ readonly name: string }>`
       PRAGMA table_info(projection_threads)
@@ -36,12 +40,6 @@ it.effect("repairs a fork database that recorded migrations through 53", () =>
       PRAGMA table_info(projection_thread_messages)
     `;
     assert.ok(messageColumns.some((column) => column.name === "context_json"));
-
-    const viewedTables = yield* sql<{ readonly name: string }>`
-      SELECT name FROM sqlite_master
-      WHERE type = 'table' AND name = 'pull_request_files_viewed'
-    `;
-    assert.strictEqual(viewedTables.length, 1);
 
     assert.deepStrictEqual(yield* runMigrations(), []);
   }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
