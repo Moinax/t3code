@@ -42,5 +42,5 @@ it.effect("repairs a fork database that recorded migrations through 54", () =>
     assert.ok(messageColumns.some((column) => column.name === "context_json"));
 
     assert.deepStrictEqual(yield* runMigrations(), []);
-  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

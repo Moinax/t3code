@@ -62,7 +62,7 @@ export class ServerRuntimeStartupError extends Schema.TaggedError<ServerRuntimeS
   {
     mode: ServerConfig.RuntimeMode,
     host: Schema.NullOr(Schema.String),
-    port: Schema.Number,
+    port: Schema.Finite,
     cause: Schema.Defect(),
   },
 ) {

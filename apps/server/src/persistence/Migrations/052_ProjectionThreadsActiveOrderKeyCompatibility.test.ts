@@ -6,7 +6,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../Migrations.ts";
 import migrateSessionStatusDetail from "./049_ProjectionThreadSessionStatusDetail.ts";
 
-it.layer(NodeSqliteClient.layerMemory())(
+it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
   "052_ProjectionThreadsActiveOrderKeyCompatibility",
   (it) => {
     it.effect("repairs fork databases that recorded migrations 49 through 51", () =>

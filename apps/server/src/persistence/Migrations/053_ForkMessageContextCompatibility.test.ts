@@ -42,6 +42,6 @@ for (const source of ["fork", "upstream", "fresh"] as const) {
       assert.ok(threadColumns.some((column) => column.name === "active_order_key"));
 
       assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 }
