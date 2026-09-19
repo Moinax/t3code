@@ -1,6 +1,6 @@
-import type { ForkUpdateAction, ForkUpdateState } from "./forkUpdate.ts";
 import * as Schema from "effect/Schema";
 
+import type { ForkUpdateAction, ForkUpdateState } from "./forkUpdate.ts";
 import {
   PreviewAutomationClickInput,
   PreviewAutomationEvaluateInput,
