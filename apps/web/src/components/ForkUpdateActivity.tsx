@@ -64,7 +64,7 @@ export function ForkUpdateActivity({
               size="xs"
               variant="ghost"
               aria-pressed={wrap}
-              className={wrap ? "bg-accent" : undefined}
+              data-pressed={wrap ? "" : undefined}
               onClick={() => setWrap(!wrap)}
             >
               <WrapTextIcon aria-hidden="true" />

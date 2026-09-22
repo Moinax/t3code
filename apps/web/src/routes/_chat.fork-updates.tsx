@@ -22,7 +22,7 @@ function ForkUpdatesPage() {
     ) ?? [];
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden">
       <WorkspacePageHeader electron={isElectron}>
         <GitCommitHorizontalIcon className="size-4 text-muted-foreground" />
         <h1 className="text-sm font-medium">Fork updates</h1>
