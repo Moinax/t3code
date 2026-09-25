@@ -24,6 +24,7 @@ it.effect("repairs a fork database that recorded migrations through 53", () =>
     assert.deepStrictEqual(applied, [
       [54, "ProjectionThreadsAutoSettleDisabledAt"],
       [55, "ForkPullRequestFilesViewedCompatibility"],
+      [56, "ForkAutoSettleDisabledAtCompatibility"],
     ]);
 
     const threadColumns = yield* sql<{ readonly name: string }>`
@@ -31,6 +32,7 @@ it.effect("repairs a fork database that recorded migrations through 53", () =>
     `;
     assert.ok(threadColumns.some((column) => column.name === "title_state_json"));
     assert.ok(threadColumns.some((column) => column.name === "active_order_key"));
+    assert.ok(threadColumns.some((column) => column.name === "auto_settle_disabled_at"));
 
     const messageColumns = yield* sql<{ readonly name: string }>`
       PRAGMA table_info(projection_thread_messages)
