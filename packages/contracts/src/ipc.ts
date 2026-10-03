@@ -1011,6 +1011,18 @@ export const DesktopPreviewRecordingSaveInputSchema = Schema.Struct({
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
+/**
+ * A `t3code://` deep link that has already been validated by the main process.
+ *
+ * Discriminated so future link kinds (for example opening a dialog) can be added
+ * without the renderer having to re-parse raw URLs.
+ */
+export type DesktopDeepLinkTarget = {
+  readonly kind: "thread";
+  readonly environmentId: string;
+  readonly threadId: string;
+};
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled: () => boolean;
@@ -1102,6 +1114,7 @@ export interface DesktopBridge {
   onMenuAction: (listener: (action: string) => void) => () => void;
   onSnapShotEvent: (listener: (event: DesktopSnapShotEvent) => void) => () => void;
   onQuitShortcut: (listener: (event: QuitShortcutHintEvent) => void) => () => void;
+  onDeepLink: (listener: (target: DesktopDeepLinkTarget) => void) => () => void;
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getWindowZoomFactor: () => number;

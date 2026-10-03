@@ -13,9 +13,18 @@ import { useEnvironmentThread } from "../state/threads";
 import {
   buildThreadRouteParams,
   isThreadRouteSnapshotAuthoritative,
+  resolveThreadRouteExit,
   resolveThreadRouteRenderState,
   type ThreadRouteTarget,
 } from "../threadRoutes";
+
+/**
+ * How long a thread id this client has never heard of is given to arrive on the
+ * live stream before the route treats it as gone. Generous on purpose: the cost
+ * of waiting is a blank pane on a link that was bad anyway, while the cost of
+ * leaving early is landing the user in another project's draft.
+ */
+const UNSYNCED_THREAD_GRACE_MS = 2_500;
 
 /**
  * Unkeyed so navigating between server threads reuses one ChatView. Rendered by the `_chat`
@@ -88,20 +97,46 @@ export function ThreadRouteView({
     draftThreadExists: draftThread !== null,
   });
   const environmentHasAnyThreads = environmentThreadRefs.length > 0 || environmentHasDraftThreads;
+  const exit = resolveThreadRouteExit({
+    renderState,
+    environmentHasAnyThreads,
+    serverThreadDeleted: serverThreadShell?.deletedAt != null,
+  });
+  const routeEnvironmentId = target.kind === "server" ? target.threadRef.environmentId : null;
+  const routeThreadId = target.kind === "server" ? target.threadRef.threadId : null;
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears pending file drops and navigates the router home once a server thread is confirmed missing
   useEffect(() => {
-    if (target.kind !== "server" || !bootstrapComplete) {
+    if (routeEnvironmentId === null || routeThreadId === null || renderState !== "missing") {
       return;
     }
-    if (renderState === "missing") {
+
+    const clearPendingFileDrops = () => {
       const { clearPendingFileDropsForThread } = useSidebarPendingFileDropStore.getState();
-      clearPendingFileDropsForThread(target.threadRef);
-      if (environmentHasAnyThreads && !background) {
-        void navigate({ to: "/", replace: true });
-      }
+      clearPendingFileDropsForThread({
+        environmentId: routeEnvironmentId,
+        threadId: routeThreadId,
+      });
+    };
+
+    if (exit === "stay" || background) {
+      clearPendingFileDrops();
+      return;
     }
-  }, [background, bootstrapComplete, environmentHasAnyThreads, navigate, renderState, target]);
+    if (exit === "immediate") {
+      clearPendingFileDrops();
+      void navigate({ to: "/", replace: true });
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      clearPendingFileDrops();
+      void navigate({ to: "/", replace: true });
+    }, UNSYNCED_THREAD_GRACE_MS);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [background, exit, navigate, renderState, routeEnvironmentId, routeThreadId]);
 
   let view: React.ReactNode = null;
   let redirect: React.ReactNode = null;

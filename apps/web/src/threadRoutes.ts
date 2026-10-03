@@ -55,6 +55,26 @@ export function resolveThreadRouteRenderState(input: {
     : "ready";
 }
 
+/**
+ * What the route does about a thread it cannot render. `after-sync-grace` covers a
+ * thread created out of band and linked before its shell arrives on the stream;
+ * leaving at once landed on another project's draft. A deleted thread leaves at once.
+ */
+export type ThreadRouteExit = "stay" | "immediate" | "after-sync-grace";
+
+export function resolveThreadRouteExit(input: {
+  renderState: ThreadRouteRenderState;
+  environmentHasAnyThreads: boolean;
+  serverThreadDeleted: boolean;
+}): ThreadRouteExit {
+  // `missing` already implies bootstrap is complete — before that the state is
+  // `loading` — so there is nothing else to wait for here.
+  if (input.renderState !== "missing" || !input.environmentHasAnyThreads) {
+    return "stay";
+  }
+  return input.serverThreadDeleted ? "immediate" : "after-sync-grace";
+}
+
 export function buildThreadRouteParams(ref: ScopedThreadRef): {
   environmentId: EnvironmentId;
   threadId: ThreadId;

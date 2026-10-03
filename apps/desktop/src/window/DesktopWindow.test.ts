@@ -45,7 +45,7 @@ import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
-import { SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
+import { DEEP_LINK_CHANNEL, SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 import * as PreviewManager from "../preview/Manager.ts";
@@ -547,6 +547,36 @@ describe("DesktopWindow", () => {
           assert.equal(yield* Ref.get(createCount), 3);
         }).pipe(Effect.provide(layer));
       }),
+  );
+
+  it.effect("delivers deep links without backend readiness when local execution is disabled", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        desktopSettings: {
+          ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+          localEnvironmentEnabled: false,
+        },
+      });
+      const target = {
+        kind: "thread" as const,
+        environmentId: "local",
+        threadId: "thread-123",
+      };
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.dispatchDeepLink(target);
+
+        assert.equal(yield* Ref.get(createCount), 1);
+        assert.deepEqual(fakeWindow.send.mock.calls, [[DEEP_LINK_CHANNEL, target]]);
+      }).pipe(Effect.provide(layer));
+    }),
   );
 
   it.effect("blocks only repeated Cmd+W input before it reaches the native window menu", () =>

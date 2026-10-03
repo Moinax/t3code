@@ -1,0 +1,193 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeNet from "node:net";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+
+import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
+import * as DesktopWindow from "../window/DesktopWindow.ts";
+import * as DesktopDeepLink from "./DesktopDeepLink.ts";
+import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import { makeComponentLogger } from "./DesktopObservability.ts";
+
+// Delivers thread links received through the fork's low-latency local socket.
+// OS-delivered links belong to DesktopClerk and DesktopWebLinks, which also
+// preserve prompt-link query parameters. Keeping the socket as the only input
+// here prevents a thread link from racing through two renderer channels.
+
+const { logInfo, logWarning } = makeComponentLogger("desktop-deep-link-router");
+
+/**
+ * Path of the local socket a link can be handed to directly. `XDG_RUNTIME_DIR` is
+ * user-owned, 0700 and cleared on logout; the temp-dir fallback relies on the
+ * socket's 0600 mode for the ownership check.
+ */
+export function deepLinkSocketPath(input: {
+  readonly isDevelopment: boolean;
+  readonly runtimeDir: string | undefined;
+  readonly tmpDir: string;
+  readonly uid: number;
+}): string {
+  // Derived from the protocol scheme so the dev/prod channel split is defined
+  // once: a caller that knows which scheme it writes knows which socket too.
+  const name = `${ElectronProtocol.getDesktopScheme(input.isDevelopment)}-deeplink.sock`;
+  const directory = input.runtimeDir?.trim();
+  return directory !== undefined && directory.length > 0
+    ? NodePath.join(directory, name)
+    : // No per-user runtime dir, so the uid goes in the name: /tmp is shared, and
+      // two users must not race for the same path.
+      NodePath.join(input.tmpDir, `${input.uid}-${name}`);
+}
+
+export class DeepLinkSocketError extends Schema.TaggedError<DeepLinkSocketError>()(
+  "DeepLinkSocketError",
+  {
+    socketPath: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to open the deep link socket at ${this.socketPath}.`;
+  }
+}
+
+export class DesktopDeepLinkRouter extends Context.Service<
+  DesktopDeepLinkRouter,
+  {
+    readonly register: Effect.Effect<void, never, Scope.Scope>;
+  }
+>()("@t3tools/desktop/app/DesktopDeepLinkRouter") {}
+
+const make = Effect.gen(function* () {
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const context = yield* Effect.context<DesktopWindow.DesktopWindow>();
+  const runPromise = Effect.runPromiseWith(context);
+
+  const schemes = [ElectronProtocol.getDesktopScheme(environment.isDevelopment)];
+
+  const handle = (rawUrl: string) => {
+    const target = DesktopDeepLink.parseDeepLink(rawUrl, schemes);
+    if (target === null) {
+      // Not ours to act on: OAuth callbacks and the renderer bundle URL also
+      // use this scheme, and they are handled elsewhere.
+      return;
+    }
+    void runPromise(
+      Effect.gen(function* () {
+        yield* logInfo("received deep link", { source: "socket", kind: target.kind });
+        yield* desktopWindow.dispatchDeepLink(target);
+      }).pipe(
+        // A failed delivery must never take down the app.
+        Effect.catchCause((cause) =>
+          Effect.logWarning("failed to dispatch deep link", { source: "socket", cause }),
+        ),
+      ),
+    );
+  };
+
+  // Lets local callers (status bar, hotkey) skip the ~1.4s second-instance launch
+  // `xdg-open` costs. The 0600 socket in a user-owned directory is the
+  // authentication, the same boundary `xdg-open` assumes; nothing is read back and
+  // the only action is the one `handle` performs for any other link.
+  const listenOnSocket = Effect.gen(function* () {
+    const socketPath = deepLinkSocketPath({
+      isDevelopment: environment.isDevelopment,
+      runtimeDir: process.env.XDG_RUNTIME_DIR,
+      tmpDir: NodeOS.tmpdir(),
+      uid: process.getuid?.() ?? 0,
+    });
+
+    const server = yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        // A crash leaves the socket file behind and `listen` would refuse to
+        // bind. Only the single instance holding the lock reaches this, so
+        // whatever is there is ours and stale.
+        try {
+          NodeFS.unlinkSync(socketPath);
+        } catch {
+          // Nothing to clear.
+        }
+        const created = NodeNet.createServer((connection) => {
+          connection.setEncoding("utf8");
+          let received = "";
+          // One URL per connection, first line wins: a caller that opens the
+          // socket and stalls must not be able to grow this buffer forever.
+          connection.on("data", (chunk: string) => {
+            received += chunk;
+            if (received.length > 4096 || received.includes("\n")) {
+              connection.end();
+            }
+          });
+          connection.on("close", () => {
+            const url = received.split("\n", 1)[0]?.trim() ?? "";
+            if (url.length > 0) handle(url);
+          });
+          connection.on("error", () => connection.destroy());
+        });
+        created.on("error", () => {
+          // Never fatal: losing this listener costs speed, not function —
+          // `xdg-open` still routes the same links.
+        });
+        return created;
+      }),
+      (created) =>
+        Effect.sync(() => {
+          created.close();
+          try {
+            NodeFS.unlinkSync(socketPath);
+          } catch {
+            // Already gone.
+          }
+        }),
+    );
+
+    yield* Effect.callback<void, DeepLinkSocketError>((resume) => {
+      let settled = false;
+      const finish = (result: Effect.Effect<void, DeepLinkSocketError>) => {
+        if (settled) return;
+        settled = true;
+        resume(result);
+      };
+      // The socket must never be observable with open permissions: in the
+      // /tmp fallback the directory is shared, and chmod-after-listen leaves
+      // a window where another user could connect. umask makes it be born
+      // owner-only; restored as soon as listen settles.
+      const previousUmask = process.umask(0o077);
+      server.listen(socketPath, () => {
+        process.umask(previousUmask);
+        try {
+          NodeFS.chmodSync(socketPath, 0o600);
+          finish(Effect.void);
+        } catch (error) {
+          // A socket we cannot lock down is worse than none: close it rather
+          // than leave a world-writable entry point to window navigation.
+          server.close();
+          finish(Effect.fail(new DeepLinkSocketError({ socketPath, cause: error })));
+        }
+      });
+      server.once("error", (error) => {
+        process.umask(previousUmask);
+        finish(Effect.fail(new DeepLinkSocketError({ socketPath, cause: error })));
+      });
+    });
+
+    yield* logInfo("listening for deep links", { socketPath });
+  }).pipe(
+    Effect.catchCause((cause) =>
+      logWarning("could not open the deep link socket; falling back to URL routing", { cause }),
+    ),
+  );
+
+  const register = listenOnSocket.pipe(Effect.withSpan("desktop.deepLinkRouter.register"));
+
+  return DesktopDeepLinkRouter.of({ register });
+});
+
+export const layer = Layer.effect(DesktopDeepLinkRouter, make);
