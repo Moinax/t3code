@@ -14,6 +14,7 @@ export const WEB_LINK_OPEN_CHANNEL = "desktop:web-link-open";
 export const WEB_LINK_READY_CHANNEL = "desktop:web-link-ready";
 export const QUIT_SHORTCUT_CHANNEL = "desktop:quit-shortcut";
 export const TRACKPAD_SCROLL_END_CHANNEL = "desktop:trackpad-scroll-end";
+export const DEEP_LINK_CHANNEL = "desktop:deep-link";
 export const GET_WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:get-window-fullscreen-state";
 export const WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:window-fullscreen-state";
 export const DESKTOP_APP_ACTIVATION_READY_CHANNEL = "desktop:app-activation-ready";
