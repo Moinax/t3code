@@ -300,4 +300,12 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
       const result = yield* threads.dispatch(command).pipe(Effect.mapError(unavailable));
       return { sequence: result.sequence };
     }),
+  // Every MCP token is scoped to one thread, so renaming the calling thread
+  // needs no threadId and no capability beyond write access to it.
+  set_thread_title: (input) =>
+    dispatch(undefined, (common) => ({
+      ...common,
+      type: "thread.metadata.update",
+      title: input.title,
+    })),
 });
