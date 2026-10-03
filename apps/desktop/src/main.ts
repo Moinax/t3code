@@ -53,6 +53,7 @@ import * as DesktopNetworkInterfaces from "./backend/DesktopNetworkInterfaces.ts
 import * as DesktopEnvironment from "./app/DesktopEnvironment.ts";
 import * as DesktopManagedPolicy from "./app/DesktopManagedPolicy.ts";
 import * as DesktopLifecycle from "./app/DesktopLifecycle.ts";
+import * as DesktopDeepLinkRouter from "./app/DesktopDeepLinkRouter.ts";
 import * as DesktopLinuxUrlHandler from "./app/DesktopLinuxUrlHandler.ts";
 import * as DesktopShutdown from "./app/DesktopShutdown.ts";
 import * as DesktopObservability from "./app/DesktopObservability.ts";
@@ -225,6 +226,7 @@ const layerDesktopApplication = Layer.mergeAll(
   DesktopApplicationMenu.layer,
   DesktopLinuxUrlHandler.layer,
   DesktopCliCommand.layer,
+  DesktopDeepLinkRouter.layer,
 ).pipe(
   Layer.provideMerge(layerDesktopSnapShot),
   Layer.provideMerge(
