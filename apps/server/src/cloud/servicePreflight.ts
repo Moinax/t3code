@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 
 import packageJson from "../../package.json" with { type: "json" };
 import { BUILD_MIGRATION_HEAD, recordedMigrations } from "../persistence/databaseMigrationHead.ts";
+import { FORK_RECORDED_NAMES } from "../persistence/ForkMigrations.ts";
 import { skippedV2Migrations } from "../persistence/Migrations.ts";
 import { reconciledV2PreviewHistory } from "../persistence/reconcileV2PreviewMigration.ts";
 import type * as ProcessRunner from "../processRunner.ts";
@@ -80,7 +81,9 @@ export function runServicePreflight(input: {
   // Startup reconciles V2 preview ids before it checks the history, so check what it will see.
   const reconciled = reconciledV2PreviewHistory(recorded);
   const incompatible =
-    reconciled === null ? ["an unexpected V2 preview history"] : skippedV2Migrations(reconciled);
+    reconciled === null
+      ? ["an unexpected V2 preview history"]
+      : skippedV2Migrations(reconciled, undefined, FORK_RECORDED_NAMES);
   if (incompatible.length > 0) {
     return {
       status: "blocked",
