@@ -32,6 +32,7 @@ import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopLegacyLocalStorage from "./DesktopLegacyLocalStorage.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
+import * as DesktopDeepLinkRouter from "./DesktopDeepLinkRouter.ts";
 import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
@@ -154,6 +155,9 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
         } as unknown as DesktopUpdates.DesktopUpdates["Service"]),
         Effect.provideService(DesktopLinuxUrlHandler.DesktopLinuxUrlHandler, {
           register: stub.registerLinuxUrlHandler,
+        }),
+        Effect.provideService(DesktopDeepLinkRouter.DesktopDeepLinkRouter, {
+          register: Effect.void,
         }),
       )
       .pipe(
