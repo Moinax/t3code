@@ -1,6 +1,13 @@
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import {
+  FORK_RECORDED_NAMES,
+  LAST_UPSTREAM_ID_AT_SPLIT,
+  reconcileForkMigrationLedger,
+  restoreUpstreamMigrationNames,
+  runForkMigrations,
+} from "./ForkMigrations.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -146,6 +153,9 @@ const migrationEntries = [
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
+/** The migration each id belongs to in this build, upstream's source of truth. */
+const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
+
 const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
@@ -161,10 +171,19 @@ const FIRST_V2_MIGRATION_ID = 55;
  * Fail before migrating when the migrator would skip one of V2's own
  * migrations. It skips every id up to the highest recorded one, whatever name
  * was recorded, so a database that took a V2 id for another migration would
- * start without V2's schema and fail on first use.
+ * start without V2's schema and fail on first use. Earlier ids keep the
+ * warning below: databases with a site-local migration there still work.
+ *
+ * `repairableNames` are the names the fork wrote into upstream's ledger before
+ * it moved to one of its own. A row under one of those is the case the repair
+ * chain exists for — it replays upstream's migration at that id and hands the
+ * name back — so refusing on it would turn every pre-split fork database into a
+ * build that cannot start. Any other name is somebody else's and still refuses:
+ * the chain can only vouch for what the fork itself recorded.
  */
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
-  throughId?: number,
+  throughId: number | undefined,
+  repairableNames: ReadonlySet<string>,
 ) {
   const sql = yield* SqlClient.SqlClient;
   const tables = yield* sql`
@@ -186,6 +205,7 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
       return [];
     const recordedName = recordedNames.get(id);
     if (recordedName === name) return [];
+    if (recordedName !== undefined && repairableNames.has(recordedName)) return [];
     return [`${id}_${name} (recorded: ${recordedName ?? "nothing"})`];
   });
   if (skipped.length === 0) return;
@@ -207,13 +227,47 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
-  if (includesV2) {
-    yield* assertV2MigrationsCanRun(toMigrationInclusive);
+  // The fork's migrations live in their own ledger, and the two repairs around
+  // this run hand upstream's ids back. A bounded run reconstructs an older
+  // database for a test, so it stays out of all three.
+  const includeForkMigrations = toMigrationInclusive === undefined;
+  if (includeForkMigrations) {
+    yield* reconcileForkMigrationLedger();
   }
-  const executedMigrations = [
-    ...previewMigrations,
-    ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
-  ];
+  // After that repair, which releases the ids the fork took past the split, so
+  // this reads the ledger upstream's migrator is about to read. The fork's own
+  // names are exempt only when the chain that redeems them is going to run.
+  if (includesV2) {
+    yield* assertV2MigrationsCanRun(
+      toMigrationInclusive,
+      includeForkMigrations ? FORK_RECORDED_NAMES : new Set(),
+    );
+  }
+  const executedMigrations = [...previewMigrations];
+  if (includeForkMigrations) {
+    // Upstream's run is split at the fork's old boundary, because the repair
+    // chain has to land between the two halves. After upstream's 055: its gate
+    // asks the schema, which nothing has created before then. Before upstream's
+    // first migration above the split: 057 alters `scheduled_tasks`, and on a
+    // database whose ledger claims 055 under a fork name the repair is the only
+    // thing that creates it — run the other way round, upstream's own migration
+    // fails on a table that does not exist yet.
+    executedMigrations.push(
+      ...(yield* run({ loader: makeMigrationLoader(LAST_UPSTREAM_ID_AT_SPLIT) })),
+    );
+    // Reported on their own, never folded into the return value: that list is
+    // upstream's ledger, and these ids belong to another one.
+    const forkMigrations = yield* runForkMigrations;
+    yield* restoreUpstreamMigrationNames(manifestNames);
+    if (forkMigrations.length > 0) {
+      yield* Effect.log("Fork migrations ran successfully").pipe(
+        Effect.annotateLogs({
+          migrations: forkMigrations.map(([id, name]) => `${id}_${name}`),
+        }),
+      );
+    }
+  }
+  executedMigrations.push(...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })));
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
@@ -224,7 +278,6 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     readonly migration_id: number;
     readonly name: string;
   }>`SELECT migration_id, name FROM effect_sql_migrations`;
-  const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
   const divergent = recorded.flatMap((row) => {
     const expected = manifestNames.get(row.migration_id);
     if (expected === undefined) {
