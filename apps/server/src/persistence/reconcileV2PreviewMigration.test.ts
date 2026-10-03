@@ -37,6 +37,9 @@ describe("V2 preview upgrade", () => {
         [53, "PullRequestFilesViewed"],
         [54, "ProjectionThreadsAutoSettleDisabledAt"],
         [56, "RemoveRedundantProjectionIndexes"],
+        [57, "ForkPullRequestFilesViewedCompatibility"],
+        [58, "ForkAutoSettleDisabledAtCompatibility"],
+        [59, "ForkOrchestrationV2Compatibility"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -116,6 +119,9 @@ describe("V2 preview upgrade", () => {
         [53, "PullRequestFilesViewed"],
         [54, "ProjectionThreadsAutoSettleDisabledAt"],
         [56, "RemoveRedundantProjectionIndexes"],
+        [57, "ForkPullRequestFilesViewedCompatibility"],
+        [58, "ForkAutoSettleDisabledAtCompatibility"],
+        [59, "ForkOrchestrationV2Compatibility"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
