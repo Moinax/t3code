@@ -79,6 +79,14 @@ it.layer(NodeServices.layer)("service preflight database", (it) => {
         BUILD_MIGRATION_HEAD,
       );
 
+      // Startup's fork repair chain replays upstream's migration under a fork name, so it passes.
+      const v2Name = migrationManifest.find(([id]) => id === 55)![1];
+      db.prepare("UPDATE effect_sql_migrations SET name = ? WHERE migration_id = 55").run(
+        "ForkOrchestrationV2Compatibility",
+      );
+      expect(preflight().status).toBe("ready");
+      db.prepare("UPDATE effect_sql_migrations SET name = ? WHERE migration_id = 55").run(v2Name);
+
       // Startup reconciles this V2 preview history, so it must not block an update.
       const preview = path.join(path.dirname(databasePath), "preview.sqlite");
       const previewDb = new NodeSqlite.DatabaseSync(preview);

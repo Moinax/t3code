@@ -6,6 +6,14 @@ import {
   DATABASE_MIGRATIONS_FINISHED_MESSAGE,
   DATABASE_MIGRATIONS_STARTED_MESSAGE,
 } from "@t3tools/shared/databaseMigrationLog";
+import {
+  FORK_RECORDED_NAMES,
+  hasPendingForkMigrations,
+  LAST_UPSTREAM_ID_AT_SPLIT,
+  reconcileForkMigrationLedger,
+  restoreUpstreamMigrationNames,
+  runForkMigrations,
+} from "./ForkMigrations.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -197,6 +205,9 @@ const migrationEntries = [
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
+/** The migration each id belongs to in this build, upstream's source of truth. */
+const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
+
 const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
@@ -211,6 +222,7 @@ const FIRST_V2_MIGRATION_ID = 55;
 export function skippedV2Migrations(
   recorded: ReadonlyArray<{ readonly id: number; readonly name: string }>,
   throughId?: number,
+  repairableNames: ReadonlySet<string> = new Set(),
 ): string[] {
   const latestRecordedId = Math.max(0, ...recorded.map((row) => row.id));
   const recordedNames = new Map(recorded.map((row) => [row.id, row.name]));
@@ -222,13 +234,18 @@ export function skippedV2Migrations(
     )
       return [];
     const recordedName = recordedNames.get(id);
-    return recordedName === name ? [] : [`${id}_${name} (recorded: ${recordedName ?? "nothing"})`];
+    if (recordedName === name) return [];
+    if (recordedName !== undefined && repairableNames.has(recordedName)) return [];
+    return [`${id}_${name} (recorded: ${recordedName ?? "nothing"})`];
   });
 }
 
 // Migrators skip ids up to the highest recorded; reject collisions that would skip V2 schema.
+// `repairableNames` are fork names the repair chain replays upstream's migration over and
+// hands back, so they pass; any other name is somebody else's and still refuses.
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
-  throughId?: number,
+  throughId: number | undefined,
+  repairableNames: ReadonlySet<string>,
 ) {
   const sql = yield* SqlClient.SqlClient;
   const tables = yield* sql`
@@ -242,6 +259,7 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
   const skipped = skippedV2Migrations(
     recorded.map((row) => ({ id: row.migration_id, name: row.name })),
     throughId,
+    repairableNames,
   );
   const latestRecordedId = Math.max(0, ...recorded.map((row) => row.migration_id));
   if (skipped.length === 0) return;
@@ -253,7 +271,7 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
 
 const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
 
-// Mirrors the Migrator, which runs only ids above the highest recorded, plus the V2-preview reconciliation.
+// Mirrors the Migrator, which runs only ids above the highest recorded, plus the V2-preview and fork ledger repairs.
 export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* () {
   const sql = yield* SqlClient.SqlClient;
   const tables = yield* sql`
@@ -267,7 +285,11 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
     FROM effect_sql_migrations
   `;
   const row = rows[0];
-  return (row?.latestId ?? 0) < latestMigrationId || (row?.previewRows ?? 0) > 0;
+  return (
+    (row?.latestId ?? 0) < latestMigrationId ||
+    (row?.previewRows ?? 0) > 0 ||
+    (yield* hasPendingForkMigrations())
+  );
 });
 
 const run = Migrator.make({});
@@ -280,12 +302,26 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
   // The desktop waits past its readiness budget until the finished line follows this one.
-  if (yield* hasPendingMigrations()) yield* Effect.log(DATABASE_MIGRATIONS_STARTED_MESSAGE);
+  const startedMigrations = yield* hasPendingMigrations();
+  if (startedMigrations) yield* Effect.log(DATABASE_MIGRATIONS_STARTED_MESSAGE);
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+  // The fork's migrations live in their own ledger, and the two repairs around
+  // this run hand upstream's ids back. A bounded run reconstructs an older
+  // database for a test, so it stays out of all three.
+  const includeForkMigrations = toMigrationInclusive === undefined;
+  if (includeForkMigrations) {
+    yield* reconcileForkMigrationLedger();
+  }
+  // After that repair, which releases the ids the fork took past the split, so
+  // this reads the ledger upstream's migrator is about to read. The fork's own
+  // names are exempt only when the chain that redeems them is going to run.
   if (includesV2) {
-    yield* assertV2MigrationsCanRun(toMigrationInclusive);
+    yield* assertV2MigrationsCanRun(
+      toMigrationInclusive,
+      includeForkMigrations ? FORK_RECORDED_NAMES : new Set(),
+    );
   }
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* sql`
@@ -302,10 +338,31 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     ([id]) =>
       id > latestRecordedId && (toMigrationInclusive === undefined || id <= toMigrationInclusive),
   );
+  const runForkRepair = Effect.gen(function* () {
+    // Reported on their own, never folded into the return value: that list is
+    // upstream's ledger, and these ids belong to another one.
+    const forkMigrations = yield* runForkMigrations;
+    yield* restoreUpstreamMigrationNames(manifestNames);
+    if (forkMigrations.length > 0) {
+      yield* Effect.log("Fork migrations ran successfully").pipe(
+        Effect.annotateLogs({
+          migrations: forkMigrations.map(([id, name]) => `${id}_${name}`),
+        }),
+      );
+    }
+  });
+  // The repair chain lands at the fork's old boundary: after 055, whose schema its gate reads,
+  // and before 057, which alters `scheduled_tasks` that only the repair creates when the ledger
+  // claims 055 under a fork name.
+  let forkRepairPending = includeForkMigrations;
   // One transaction per migration: an index build on a large database can take minutes, and a
   // restart then resumes after the last finished migration instead of rolling all of them back.
   const executedMigrations: Array<readonly [id: number, name: string]> = [...previewMigrations];
   for (const [index, [id, name]] of pending.entries()) {
+    if (forkRepairPending && id > LAST_UPSTREAM_ID_AT_SPLIT) {
+      yield* runForkRepair;
+      forkRepairPending = false;
+    }
     if (latestRecordedId > 0) {
       yield* Effect.log(DATABASE_MIGRATION_PROGRESS_MESSAGE).pipe(
         Effect.annotateLogs({
@@ -316,8 +373,12 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     }
     executedMigrations.push(...(yield* run({ loader: makeMigrationLoader(id) })));
   }
+  if (forkRepairPending) {
+    yield* runForkRepair;
+  }
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
-  yield* migrations.length === 0
+  // Fork-only work runs nothing here, yet the started line it logged still needs its finish.
+  yield* migrations.length === 0 && !startedMigrations
     ? Effect.logDebug("Database schema is current")
     : Effect.log(DATABASE_MIGRATIONS_FINISHED_MESSAGE).pipe(Effect.annotateLogs({ migrations }));
 
@@ -325,7 +386,6 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     readonly migration_id: number;
     readonly name: string;
   }>`SELECT migration_id, name FROM effect_sql_migrations`;
-  const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
   const divergent = recorded.flatMap((row) => {
     const expected = manifestNames.get(row.migration_id);
     if (expected === undefined) {
