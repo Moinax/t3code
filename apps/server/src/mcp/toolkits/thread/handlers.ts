@@ -361,4 +361,15 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       return { sequence: result.sequence };
     }),
   ),
+  // The focused tool intentionally exposes no threadId: thread-scoped callers
+  // rename themselves, while outside clients receive the standard target-required failure.
+  set_thread_title: McpToolAccess.writesThreads(
+    () => [undefined],
+    (input) =>
+      dispatch(undefined, (common) => ({
+        ...common,
+        type: "thread.metadata.update",
+        title: input.title,
+      })),
+  ),
 });
