@@ -12,19 +12,19 @@ import repairForkHistory from "./058_ForkAutoSettleDisabledAtCompatibility.ts";
 // creates every orchestration_v2_* table the app now reads. Replay them here, at
 // an id above everything the fork released.
 //
-// Gated on the ledger, not run unconditionally like the rest of this chain:
-// 055 creates its tables with bare `CREATE TABLE`, so replaying it where it
-// already ran fails. The migrator inserts every pending row before running any
-// of them, so by the time this executes, id 55 already names whichever migration
-// owns it on this database.
+// Gated, not run unconditionally like the rest of this chain: 055 creates its
+// tables with bare `CREATE TABLE`, so replaying it where it already ran fails.
+// The gate asks the schema rather than the ledger, because the ledger is the
+// thing that is wrong on the databases this repair exists for — an id can carry
+// the fork's name while upstream's migration has in fact been replayed under it.
 export default Effect.gen(function* () {
   yield* repairForkHistory;
 
   const sql = yield* SqlClient.SqlClient;
-  const recorded = yield* sql<{ readonly name: string }>`
-    SELECT name FROM effect_sql_migrations WHERE migration_id = 55
+  const v2Tables = yield* sql<{ readonly name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'orchestration_v2_events'
   `;
-  if (recorded[0]?.name === "OrchestrationV2") return;
+  if (v2Tables.length > 0) return;
 
   yield* orchestrationV2;
   yield* removeRedundantProjectionIndexes;
