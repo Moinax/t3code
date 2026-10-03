@@ -256,6 +256,21 @@ const SubmitOutputTool = Tool.make("t3_submit_output", {
   .annotate(Tool.Destructive, false)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
+const SetThreadTitleTool = Tool.make("set_thread_title", {
+  ...commandTool,
+  description: "Rename this thread in T3 Code. Renames the calling thread only.",
+  parameters: Schema.Struct({
+    title: TrimmedNonEmptyString.annotate({
+      description: "The new thread title, for example DEV-123: Fix the login redirect.",
+    }),
+  }),
+})
+  .annotate(Tool.Title, "Set thread title")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 export const ThreadToolkit = Toolkit.make(
   ScheduledTaskRunTool,
   ThreadSearchTool,
@@ -265,4 +280,5 @@ export const ThreadToolkit = Toolkit.make(
   PendingRequestTool,
   QueueTool,
   SubmitOutputTool,
+  SetThreadTitleTool,
 );
