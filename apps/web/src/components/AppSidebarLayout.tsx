@@ -306,9 +306,16 @@ function registerAppShellCommands(router: AnyRouter, shellElement: Element): () 
       if (!/^\/settings(\/|$)/.test(router.state.location.pathname))
         void router.navigate({ to: "/settings" });
     }),
+    window.desktopBridge?.onDeepLink((target) => {
+      if (target.kind !== "thread") return;
+      void router.navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: target.environmentId, threadId: target.threadId },
+      });
+    }),
   ];
   return () => {
-    for (const dispose of disposers) dispose();
+    for (const dispose of disposers) dispose?.();
   };
 }
 

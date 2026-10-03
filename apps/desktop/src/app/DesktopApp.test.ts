@@ -30,6 +30,7 @@ import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopLegacyLocalStorage from "./DesktopLegacyLocalStorage.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
+import * as DesktopDeepLinkRouter from "./DesktopDeepLinkRouter.ts";
 import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
@@ -150,6 +151,9 @@ it.effect.each([false, true])(
               Effect.andThen(Deferred.await(releaseRegistration)),
               Effect.ensuring(Deferred.succeed(registrationStopped, undefined)),
             ),
+          }),
+          Effect.provideService(DesktopDeepLinkRouter.DesktopDeepLinkRouter, {
+            register: Effect.void,
           }),
         )
         .pipe(
