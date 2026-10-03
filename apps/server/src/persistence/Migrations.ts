@@ -1,6 +1,11 @@
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import {
+  reconcileForkMigrationLedger,
+  restoreUpstreamMigrationNames,
+  runForkMigrations,
+} from "./ForkMigrations.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -134,6 +139,9 @@ export const migrationEntries = [
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
+/** The migration each id belongs to in this build, upstream's source of truth. */
+const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
+
 const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
@@ -195,6 +203,16 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+  // The fork's migrations live in their own ledger, and the two repairs around
+  // this run hand upstream's ids back. A bounded run reconstructs an older
+  // database for a test, so it stays out of all three.
+  const includeForkMigrations = toMigrationInclusive === undefined;
+  // Ahead of upstream's assert, never after it: on a database written before the
+  // split the fork's names still sit on upstream's ids, which is the exact clash
+  // the assert refuses to start on — and the exact thing this repair undoes.
+  if (includeForkMigrations) {
+    yield* reconcileForkMigrationLedger(manifestNames);
+  }
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);
   }
@@ -202,6 +220,19 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     ...previewMigrations,
     ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
   ];
+  if (includeForkMigrations) {
+    // Reported on their own, never folded into the return value: that list is
+    // upstream's ledger, and these ids belong to another one.
+    const forkMigrations = yield* runForkMigrations;
+    yield* restoreUpstreamMigrationNames(manifestNames);
+    if (forkMigrations.length > 0) {
+      yield* Effect.log("Fork migrations ran successfully").pipe(
+        Effect.annotateLogs({
+          migrations: forkMigrations.map(([id, name]) => `${id}_${name}`),
+        }),
+      );
+    }
+  }
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
@@ -212,7 +243,6 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     readonly migration_id: number;
     readonly name: string;
   }>`SELECT migration_id, name FROM effect_sql_migrations`;
-  const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
   const divergent = recorded.flatMap((row) => {
     const expected = manifestNames.get(row.migration_id);
     if (expected === undefined) {
