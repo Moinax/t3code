@@ -11,6 +11,11 @@
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import {
+  reconcileForkMigrationLedger,
+  restoreUpstreamMigrationNames,
+  runForkMigrations,
+} from "./ForkMigrations.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 // Import all migrations statically
@@ -70,9 +75,6 @@ import Migration0053 from "./Migrations/053_PullRequestFilesViewed.ts";
 import Migration0054 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
 import Migration0055 from "./Migrations/055_OrchestrationV2.ts";
 import Migration0056 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
-import Migration0057 from "./Migrations/057_ForkPullRequestFilesViewedCompatibility.ts";
-import Migration0058 from "./Migrations/058_ForkAutoSettleDisabledAtCompatibility.ts";
-import Migration0059 from "./Migrations/059_ForkOrchestrationV2Compatibility.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -143,12 +145,12 @@ export const migrationEntries = [
   // Preserve this migration's schema. Future V2 schema changes need new migrations.
   [55, "OrchestrationV2", Migration0055],
   [56, "RemoveRedundantProjectionIndexes", Migration0056],
-  [57, "ForkPullRequestFilesViewedCompatibility", Migration0057],
-  [58, "ForkAutoSettleDisabledAtCompatibility", Migration0058],
-  [59, "ForkOrchestrationV2Compatibility", Migration0059],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
+
+/** The migration each id belongs to in this build, upstream's source of truth. */
+const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
 
 const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
@@ -186,10 +188,30 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     toMigrationInclusive === undefined || toMigrationInclusive >= 55
       ? yield* reconcileV2PreviewMigration()
       : [];
+  // The fork's migrations live in their own ledger, and the two repairs around
+  // this run hand upstream's ids back. A bounded run reconstructs an older
+  // database for a test, so it stays out of all three.
+  const includeForkMigrations = toMigrationInclusive === undefined;
+  if (includeForkMigrations) {
+    yield* reconcileForkMigrationLedger(manifestNames);
+  }
   const executedMigrations = [
     ...previewMigrations,
     ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
   ];
+  if (includeForkMigrations) {
+    // Reported on their own, never folded into the return value: that list is
+    // upstream's ledger, and these ids belong to another one.
+    const forkMigrations = yield* runForkMigrations;
+    yield* restoreUpstreamMigrationNames(manifestNames);
+    if (forkMigrations.length > 0) {
+      yield* Effect.log("Fork migrations ran successfully").pipe(
+        Effect.annotateLogs({
+          migrations: forkMigrations.map(([id, name]) => `${id}_${name}`),
+        }),
+      );
+    }
+  }
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
@@ -204,7 +226,6 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     readonly migration_id: number;
     readonly name: string;
   }>`SELECT migration_id, name FROM effect_sql_migrations`;
-  const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
   const divergent = recorded.flatMap((row) => {
     const expected = manifestNames.get(row.migration_id);
     if (expected === undefined) {
