@@ -438,7 +438,7 @@ it.effect("hands web and app links to the renderer and leaves other links alone"
       assert.strictEqual(open("https://example.com/page"), 1);
       assert.strictEqual(open("http://localhost:3000/"), 1);
       assert.strictEqual(open("t3code://new?prompt=hi"), 1);
-      assert.strictEqual(open("t3code://threads/env-1/thread-1"), 1);
+      assert.strictEqual(open("t3code://threads/env-1/thread-1?prompt=follow-up"), 1);
       assert.strictEqual(open("mailto:hello@example.com"), 0);
       assert.strictEqual(open("t3code://somewhere-else"), 0);
       yield* Effect.yieldNow;
@@ -446,7 +446,7 @@ it.effect("hands web and app links to the renderer and leaves other links alone"
         "https://example.com/page",
         "http://localhost:3000/",
         "t3code://new?prompt=hi",
-        "t3code://threads/env-1/thread-1",
+        "t3code://threads/env-1/thread-1?prompt=follow-up",
       ]);
     }).pipe(
       Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, undefined, listeners)),
