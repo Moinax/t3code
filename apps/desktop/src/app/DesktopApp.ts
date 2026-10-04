@@ -235,19 +235,21 @@ const bootstrap = Effect.gen(function* () {
   }
 
   if (!(yield* Ref.get(state.quitting))) {
-    yield* primaryBackend.start;
-    yield* logBootstrapInfo("bootstrap backend start requested");
-    // The main window only opens once that backend reports ready, seconds from
-    // here on every platform, and nothing is on screen in between — so the
-    // splash is what a launch looks like until then. It goes up after the start
-    // request rather than before it: the request is what the user is waiting
-    // on, and it returns in milliseconds. A wsl-only primary waits on the WSL
-    // VM on top of the backend, which is a wait worth naming.
+    // The main window only opens once the primary backend reports ready,
+    // seconds from here on every platform, and nothing is on screen in between
+    // — so the splash is what a launch looks like until then. It goes up before
+    // the start request, because that request is not uniformly cheap: a
+    // wsl-only primary resolves its config through `wslEnvironment.preWarm` and
+    // `wslpath`, each a `wsl.exe` round trip with a 10s timeout, and `start`
+    // awaits all of it before forking. That is the one configuration whose wait
+    // has a more specific cause worth naming.
     yield* desktopWindow.showConnectingSplash(
       settings.wslOnly === true && settings.wslBackendEnabled === true
         ? Option.some("Connecting to WSL…")
         : Option.none(),
     );
+    yield* primaryBackend.start;
+    yield* logBootstrapInfo("bootstrap backend start requested");
     yield* appActivation.start.pipe(
       Effect.tap(() => logBootstrapInfo("desktop app control socket ready")),
       Effect.catch((error) => logStartupError("desktop app control socket unavailable", { error })),
