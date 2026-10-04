@@ -351,6 +351,7 @@ function layerTest(input: {
 const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | null)[]) =>
   Effect.gen(function* () {
     const createdWindows = yield* Ref.make<Electron.BrowserWindow[]>([]);
+    const createdOptions: Electron.BrowserWindowConstructorOptions[] = [];
     const createCalls = yield* Ref.make(0);
     const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
     const revealedWindows = yield* Ref.make<Electron.BrowserWindow[]>([]);
@@ -368,8 +369,9 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
     });
 
     const electronWindowShape = {
-      create: () =>
+      create: (options) =>
         Effect.gen(function* () {
+          createdOptions.push(options);
           const index = yield* Ref.getAndUpdate(createCalls, (count) => count + 1);
           const outcome = createOutcomes[index] ?? null;
           if (outcome === null) {
@@ -450,7 +452,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
       ),
     );
 
-    return { layer, createCalls, mainWindow, revealedWindows } as const;
+    return { layer, createCalls, createdOptions, mainWindow, revealedWindows } as const;
   });
 
 const captureOne = DesktopSnapShotId.make("11111111-1111-4111-8111-111111111111");
@@ -1486,7 +1488,7 @@ describe("DesktopWindow", () => {
         yield* Effect.gen(function* () {
           const desktopWindow = yield* DesktopWindow.DesktopWindow;
 
-          yield* desktopWindow.showConnectingSplash;
+          yield* desktopWindow.showConnectingSplash(Option.none());
           assert.equal(yield* Ref.get(scenario.createCalls), 1);
 
           const readyExit = yield* Effect.exit(
@@ -1515,7 +1517,7 @@ describe("DesktopWindow", () => {
         yield* Effect.gen(function* () {
           const desktopWindow = yield* DesktopWindow.DesktopWindow;
 
-          yield* desktopWindow.showConnectingSplash;
+          yield* desktopWindow.showConnectingSplash(Option.none());
           assert.equal(yield* Ref.get(scenario.createCalls), 1);
 
           yield* desktopWindow.activate;
@@ -1523,6 +1525,25 @@ describe("DesktopWindow", () => {
           assert.deepEqual(yield* Ref.get(scenario.revealedWindows), [splash.window]);
         }).pipe(Effect.provide(scenario.layer));
       }),
+  );
+
+  it.effect("titles the connecting splash apart from the main window", () =>
+    Effect.gen(function* () {
+      const splash = makeFakeBrowserWindow();
+      const scenario = yield* makeSplashScenario([splash.window]);
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.showConnectingSplash(Option.none());
+
+        // The splash and the main window share a WM class, so this title is the
+        // only thing that distinguishes them — to a tiling compositor's window
+        // rules, and to the taskbar entry a frameless spinner would otherwise
+        // contribute under the app's own name.
+        const [splashOptions] = scenario.createdOptions;
+        assert.ok(splashOptions?.title?.startsWith("Starting "), splashOptions?.title);
+      }).pipe(Effect.provide(scenario.layer));
+    }),
   );
 
   it.effect("does not dispatch menu actions to the splash before the backend is ready", () =>
@@ -1534,7 +1555,7 @@ describe("DesktopWindow", () => {
       yield* Effect.gen(function* () {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
 
-        yield* desktopWindow.showConnectingSplash;
+        yield* desktopWindow.showConnectingSplash(Option.none());
         yield* desktopWindow.dispatchMenuAction("open-settings");
 
         assert.equal(yield* Ref.get(scenario.createCalls), 1);
@@ -1553,7 +1574,7 @@ describe("DesktopWindow", () => {
       yield* Effect.gen(function* () {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
 
-        yield* desktopWindow.showConnectingSplash;
+        yield* desktopWindow.showConnectingSplash(Option.none());
         const readyExit = yield* Effect.exit(
           desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773")),
         );
@@ -1642,7 +1663,7 @@ describe("DesktopWindow", () => {
 
       yield* Effect.gen(function* () {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.showConnectingSplash;
+        yield* desktopWindow.showConnectingSplash(Option.none());
         yield* desktopWindow.dispatchSnapShotEvent({ type: "ready", id: captureOne });
 
         assert.equal(yield* Ref.get(scenario.createCalls), 1);
