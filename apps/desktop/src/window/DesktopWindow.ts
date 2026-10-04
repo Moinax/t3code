@@ -100,10 +100,11 @@ export class DesktopWindow extends Context.Service<
     readonly revealOrCreateMain: Effect.Effect<Electron.BrowserWindow, DesktopWindowError>;
     readonly activate: Effect.Effect<void, DesktopWindowError>;
     readonly createMainIfBackendReady: Effect.Effect<void, DesktopWindowError>;
-    // Show a lightweight "Connecting to WSL" splash window immediately (wsl-only
-    // mode), before the WSL backend that acts as the primary is ready. It is
-    // dismissed automatically once the real main window reveals.
-    readonly showConnectingSplash: Effect.Effect<void>;
+    // Show a lightweight splash window immediately, before the primary backend
+    // the main window waits on is ready. `detail` replaces the default "starting"
+    // message when the wait has a more specific cause worth naming (a wsl-only
+    // primary waits on the WSL VM). Dismissed once the real main window reveals.
+    readonly showConnectingSplash: (detail: Option.Option<string>) => Effect.Effect<void>;
     // Marks the primary backend as ready so `createMainIfBackendReady` and the
     // macOS "activate without windows" path may open the real main window. The
     // renderer now always loads the local client URL (getDesktopUrl) and connects
@@ -197,15 +198,22 @@ export function resolveInitialMainWindowBounds(
   return DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE;
 }
 
-// A self-contained "Connecting to WSL" splash, shown immediately in wsl-only
-// mode while the WSL backend (which serves the renderer) cold-boots. Inlined as
-// a data URL so it needs no bundled asset and no backend — pure CSS, no JS.
-function buildConnectingSplashDataUrl(shouldUseDarkColors: boolean): string {
-  const background = getInitialWindowBackgroundColor(shouldUseDarkColors);
-  const label = shouldUseDarkColors ? "#9ca3af" : "#6b7280";
-  const accent = shouldUseDarkColors ? "#f8fafc" : "#1f2937";
-  const track = shouldUseDarkColors ? "rgba(248,250,252,0.18)" : "rgba(31,41,55,0.18)";
-  const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>html,body{margin:0;height:100%}body{background:${background};color:${label};font-family:system-ui,-apple-system,'Segoe UI',sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;-webkit-user-select:none;user-select:none;-webkit-app-region:drag}.spinner{width:26px;height:26px;border:3px solid ${track};border-top-color:${accent};border-radius:50%;animation:spin .8s linear infinite}.label{font-size:13px}@keyframes spin{to{transform:rotate(360deg)}}</style></head><body><div class="spinner"></div><div class="label">Connecting to WSL…</div></body></html>`;
+// A self-contained splash, shown immediately while the primary backend
+// cold-boots. Inlined as a data URL so it needs no bundled asset and no
+// backend — pure CSS, no JS, and nothing that repaints. It is on screen for
+// the whole of the main window's own first paint, so an indefinite spinner
+// here would compete with the paint it is covering for. The `<title>` is
+// load-bearing rather than decorative: a document without one leaves Chromium
+// labelling the window with the data URL itself, which is then what the
+// taskbar shows and what a tiling compositor matches its rules against.
+function buildConnectingSplashDataUrl(input: {
+  readonly shouldUseDarkColors: boolean;
+  readonly title: string;
+  readonly message: string;
+}): string {
+  const background = getInitialWindowBackgroundColor(input.shouldUseDarkColors);
+  const label = input.shouldUseDarkColors ? "#9ca3af" : "#6b7280";
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${input.title}</title><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>html,body{margin:0;height:100%}body{background:${background};color:${label};font-family:system-ui,-apple-system,'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center;font-size:13px;-webkit-user-select:none;user-select:none;-webkit-app-region:drag}</style></head><body>${input.message}</body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
@@ -328,8 +336,8 @@ export const make = Effect.gen(function* () {
   // createMainIfBackendReady, which gates the post-readiness window
   // open in development and the macOS "activate without windows" path.
   const backendReadyRef = yield* Ref.make(false);
-  // The transient "Connecting to WSL" splash window, tracked separately so it
-  // is never mistaken for the real main window.
+  // The transient startup splash window, tracked separately so it is never
+  // mistaken for the real main window.
   const splashWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
@@ -344,7 +352,8 @@ export const make = Effect.gen(function* () {
   });
 
   // currentMainOrFirst / focusedMainOrFirst fall back to "any first window",
-  // which during WSL-only boot is the connecting splash. The splash is never
+  // which for the whole of a cold boot is the connecting splash. The splash is
+  // never
   // registered via setMain, so it must be treated as "no real main window" --
   // otherwise ensureMain/activate/dispatchMenuAction latch onto it and never
   // open (or retry) the real main. That is the failure the pool's swallowed
@@ -878,50 +887,61 @@ export const make = Effect.gen(function* () {
     yield* createMain;
   }).pipe(Effect.withSpan("desktop.window.createMainIfBackendReady"));
 
-  const showConnectingSplash = Effect.gen(function* () {
-    // Only when nothing is shown yet: no real window, no existing splash.
-    const existingSplash = yield* Ref.get(splashWindowRef);
-    if (Option.isSome(existingSplash)) return;
-    const existingWindow = yield* electronWindow.currentMainOrFirst;
-    if (Option.isSome(existingWindow)) return;
+  const showConnectingSplash = Effect.fn("desktop.window.showConnectingSplash")(
+    function* (detail: Option.Option<string>) {
+      // Only when nothing is shown yet: no real window, no existing splash.
+      const existingSplash = yield* Ref.get(splashWindowRef);
+      if (Option.isSome(existingSplash)) return;
+      const existingWindow = yield* electronWindow.currentMainOrFirst;
+      if (Option.isSome(existingWindow)) return;
 
-    const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
-    const splash = yield* electronWindow.create({
-      width: 360,
-      height: 220,
-      resizable: false,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      frame: false,
-      center: true,
-      show: false,
-      skipTaskbar: false,
-      backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
-      title: environment.displayName,
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
-    yield* Ref.set(splashWindowRef, Option.some(splash));
-    splash.once("closed", () => {
-      void runPromise(Ref.set(splashWindowRef, Option.none()));
-    });
-    splash.once("ready-to-show", () => {
-      if (!splash.isDestroyed()) {
-        splash.show();
-      }
-    });
-    void splash.loadURL(buildConnectingSplashDataUrl(shouldUseDarkColors));
-    yield* logWindowInfo("connecting splash shown");
-  }).pipe(
+      const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
+      const splashTitle = `Starting ${environment.displayName}`;
+      const splashMessage = Option.getOrElse(detail, () => `${splashTitle}…`);
+      const splash = yield* electronWindow.create({
+        width: 360,
+        height: 220,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        frame: false,
+        center: true,
+        show: false,
+        skipTaskbar: false,
+        backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
+        // Deliberately not the main window's title: the two share a window
+        // class, so the title is all a tiling compositor's rules have to tell
+        // them apart, and this one also names the taskbar entry.
+        title: splashTitle,
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+        },
+      });
+      yield* Ref.set(splashWindowRef, Option.some(splash));
+      splash.once("closed", () => {
+        void runPromise(Ref.set(splashWindowRef, Option.none()));
+      });
+      splash.once("ready-to-show", () => {
+        if (!splash.isDestroyed()) {
+          splash.show();
+        }
+      });
+      void splash.loadURL(
+        buildConnectingSplashDataUrl({
+          shouldUseDarkColors,
+          title: splashTitle,
+          message: splashMessage,
+        }),
+      );
+      yield* logWindowInfo("connecting splash shown");
+    },
     // The splash is best-effort UX — never let it fail startup.
     Effect.catch((error) =>
       logWindowWarning("failed to show connecting splash", { message: error.message }),
     ),
-    Effect.withSpan("desktop.window.showConnectingSplash"),
   );
 
   const dispatchRendererEvent = Effect.fn("desktop.window.dispatchRendererEvent")(function* (
