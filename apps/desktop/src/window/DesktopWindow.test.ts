@@ -133,6 +133,7 @@ function makeFakeBrowserWindow() {
     isFullScreen: window.isFullScreen,
     isMaximized: window.isMaximized,
     isMinimized: window.isMinimized,
+    isVisible: window.isVisible,
     loadURL: window.loadURL,
     maximize: window.maximize,
     openDevTools: webContents.openDevTools,
@@ -1452,6 +1453,30 @@ describe("DesktopWindow", () => {
           assert.deepEqual(yield* Ref.get(scenario.revealedWindows), [splash.window]);
         }).pipe(Effect.provide(scenario.layer));
       }),
+  );
+
+  it.effect("still shows the connecting splash when the main window is hidden", () =>
+    Effect.gen(function* () {
+      const main = makeFakeBrowserWindow();
+      const splash = makeFakeBrowserWindow();
+      // The main window is created hidden and reveals on its own first paint,
+      // so between the two it exists while the screen stays empty.
+      main.isVisible.mockReturnValue(false);
+      const scenario = yield* makeSplashScenario([main.window, splash.window]);
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        assert.equal(yield* Ref.get(scenario.createCalls), 1);
+
+        // A hidden main window is exactly what the splash covers for, so its
+        // existence must not suppress it.
+        yield* desktopWindow.showConnectingSplash(Option.none());
+        assert.equal(yield* Ref.get(scenario.createCalls), 2);
+        assert.ok(scenario.createdOptions[1]?.title?.startsWith("Starting "));
+      }).pipe(Effect.provide(scenario.layer));
+    }),
   );
 
   it.effect("titles the connecting splash apart from the main window", () =>

@@ -353,12 +353,11 @@ export const make = Effect.gen(function* () {
 
   // currentMainOrFirst / focusedMainOrFirst fall back to "any first window",
   // which for the whole of a cold boot is the connecting splash. The splash is
-  // never
-  // registered via setMain, so it must be treated as "no real main window" --
-  // otherwise ensureMain/activate/dispatchMenuAction latch onto it and never
-  // open (or retry) the real main. That is the failure the pool's swallowed
-  // post-readiness window-open error would otherwise strand the user in:
-  // splash up, backend ready, no main, and activation only re-reveals splash.
+  // never registered via setMain, so it must be treated as "no real main
+  // window" -- otherwise ensureMain/activate/dispatchMenuAction latch onto it
+  // and never open (or retry) the real main. That is the failure the pool's
+  // swallowed post-readiness window-open error would otherwise strand the user
+  // in: splash up, backend ready, no main, and activation only re-reveals it.
   const withoutSplash = (window: Option.Option<Electron.BrowserWindow>) =>
     Ref.get(splashWindowRef).pipe(
       Effect.map((splash) =>
@@ -889,11 +888,15 @@ export const make = Effect.gen(function* () {
 
   const showConnectingSplash = Effect.fn("desktop.window.showConnectingSplash")(
     function* (detail: Option.Option<string>) {
-      // Only when nothing is shown yet: no real window, no existing splash.
+      // Only when nothing is on screen yet: no existing splash, and no main
+      // window the user can already see. A main window that exists but is
+      // still hidden is the case the splash is for -- it is created hidden and
+      // reveals on its own first paint, which is the whole of the wait -- so
+      // its mere existence must not suppress the splash.
       const existingSplash = yield* Ref.get(splashWindowRef);
       if (Option.isSome(existingSplash)) return;
       const existingWindow = yield* electronWindow.currentMainOrFirst;
-      if (Option.isSome(existingWindow)) return;
+      if (Option.isSome(existingWindow) && existingWindow.value.isVisible()) return;
 
       const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
       const splashTitle = `Starting ${environment.displayName}`;
