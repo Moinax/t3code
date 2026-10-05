@@ -24,8 +24,8 @@
  * are the upstream ids it was wedged between, not its order here.
  */
 import * as Effect from "effect/Effect";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import ForkUpstreamIdCompatibility from "./Migrations/059_ForkOrchestrationV2Compatibility.ts";
 

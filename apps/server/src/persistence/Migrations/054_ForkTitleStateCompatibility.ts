@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import migrateTitleState from "./052_ProjectionThreadTitleState.ts";
 import repairForkHistory from "./053_ForkMessageContextCompatibility.ts";
