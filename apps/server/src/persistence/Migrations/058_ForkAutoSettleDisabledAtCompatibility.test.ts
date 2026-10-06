@@ -23,7 +23,11 @@ it.effect("repairs a fork database that recorded migrations through 55", () =>
     `;
 
     const applied = yield* runMigrations();
-    assert.deepStrictEqual(applied, [[56, "RemoveRedundantProjectionIndexes"]]);
+    assert.deepStrictEqual(applied, [
+      [56, "RemoveRedundantProjectionIndexes"],
+      [57, "ScheduledTaskWebhooks"],
+      [58, "WebhookRelayDeliveries"],
+    ]);
 
     const threadColumns = yield* sql<{ readonly name: string }>`
       PRAGMA table_info(projection_threads)

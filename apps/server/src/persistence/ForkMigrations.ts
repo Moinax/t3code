@@ -79,6 +79,20 @@ const CHAIN_REPLAYED_IDS: ReadonlySet<number> = new Set([
   43, 44, 45, 48, 49, 50, 51, 52, 53, 54, 55, 56,
 ]);
 
+/**
+ * Upstream's last migration id when the fork left its id space.
+ *
+ * Frozen rather than read off `migrationEntries`, because it is the boundary
+ * between the ids the repair chain can hand back a true name for and the ids
+ * the fork took past upstream's manifest, which has to be released — and the
+ * split is what fixed that boundary. Derived from the running build it moves
+ * with upstream, and the first upstream migration to land on 57 makes the fork
+ * row sitting there look like one of upstream's own: kept instead of released,
+ * masking the very migration this file exists to stop being skipped. Upstream
+ * has since claimed 57 and 58, so that is not hypothetical.
+ */
+export const LAST_UPSTREAM_ID_AT_SPLIT = 56;
+
 const run = Migrator.make({});
 
 /**
@@ -112,12 +126,10 @@ const recordedRows = Effect.fn("recordedMigrationRows")(function* () {
  *
  * Adoption first: a fork migration upstream's ledger shows as run is recorded
  * in the fork ledger, so the split does not replay it. Then the ids past
- * upstream's last migration are dropped — upstream's next one lands there, and
+ * upstream's last migration at the split are dropped — upstream's next one lands there, and
  * the migrator would skip it for sitting below a recorded id.
  */
-export const reconcileForkMigrationLedger = Effect.fn("reconcileForkMigrationLedger")(function* (
-  upstreamNames: ReadonlyMap<number, string>,
-) {
+export const reconcileForkMigrationLedger = Effect.fn("reconcileForkMigrationLedger")(function* () {
   const sql = yield* SqlClient.SqlClient;
   const forkRows = (yield* recordedRows()).filter((row) => FORK_RECORDED_NAMES.has(row.name));
   if (forkRows.length === 0) return { adopted: [], released: [] };
@@ -129,9 +141,8 @@ export const reconcileForkMigrationLedger = Effect.fn("reconcileForkMigrationLed
       ? [[id, name] as const]
       : [];
   });
-  const lastUpstreamId = Math.max(...upstreamNames.keys());
   const released = forkRows
-    .filter((row) => row.migration_id > lastUpstreamId)
+    .filter((row) => row.migration_id > LAST_UPSTREAM_ID_AT_SPLIT)
     .map((row) => row.migration_id);
 
   yield* sql.withTransaction(

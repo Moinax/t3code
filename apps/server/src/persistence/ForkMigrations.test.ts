@@ -59,7 +59,7 @@ const PRE_SPLIT_LEDGER = [
  */
 const emulatePreSplitForkDatabase = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* sql`DROP TABLE fork_sql_migrations`;
+  yield* sql`DROP TABLE IF EXISTS fork_sql_migrations`;
   yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 43`;
   yield* Effect.forEach(
     PRE_SPLIT_LEDGER,
@@ -70,30 +70,31 @@ const emulatePreSplitForkDatabase = Effect.gen(function* () {
 
 it.effect("hands upstream back the ids a pre-split fork database took", () =>
   Effect.gen(function* () {
-    yield* runMigrations();
+    // Only as far as the split: the migrations upstream has added above it
+    // never ran on a pre-split fork database, whose ledger sits on their ids.
+    yield* runMigrations({ toMigrationInclusive: 56 });
     yield* emulatePreSplitForkDatabase;
     // The repair had run on such a database, so its schema is complete.
     assert.ok((yield* v2Tables).includes("orchestration_v2_events"));
 
-    // Nothing left to run: upstream's migrations are all applied, and the
-    // repair is recognised from the row upstream's ledger carries for it.
-    assert.deepStrictEqual(yield* runMigrations(), []);
+    // The ids the fork took past the split are released, so upstream's own
+    // migrations above it run instead of being skipped for sitting under one
+    // of them. The repair is recognised from the row upstream's ledger carries.
+    assert.deepStrictEqual(yield* runMigrations(), [
+      [57, "ScheduledTaskWebhooks"],
+      [58, "WebhookRelayDeliveries"],
+    ]);
     assert.deepStrictEqual(yield* forkLedger, [
       { migration_id: 1, name: "ForkUpstreamIdCompatibility" },
     ]);
 
     const ledger = yield* upstreamLedger;
-    assert.strictEqual(
-      ledger.at(-1)?.migration_id,
-      56,
-      "upstream's next migration has its id back",
-    );
     assert.deepStrictEqual(
       ledger.filter(({ migration_id }) => migration_id >= 43),
       migrationManifest
         .filter(([id]) => id >= 43)
         .map(([migration_id, name]) => ({ migration_id, name })),
-      "every id the fork took inside upstream's manifest carries upstream's name",
+      "every id the fork took is upstream's again, by name and by migration",
     );
     assert.ok((yield* v2Tables).includes("orchestration_v2_events"));
     assert.deepStrictEqual(yield* runMigrations(), []);
@@ -117,9 +118,13 @@ it.effect("still repairs a pre-split database that stopped before the repair", (
     `;
     assert.deepStrictEqual(yield* v2Tables, []);
 
-    // Upstream's ledger reaches its last migration, so its run reports nothing
-    // while the fork's repair is what creates the schema it was missing.
-    assert.deepStrictEqual(yield* runMigrations(), []);
+    // Upstream's run reports only the migrations it has added above the ids
+    // this database holds, while the fork's repair is what creates the schema
+    // it was missing.
+    assert.deepStrictEqual(yield* runMigrations(), [
+      [57, "ScheduledTaskWebhooks"],
+      [58, "WebhookRelayDeliveries"],
+    ]);
     assert.ok((yield* v2Tables).includes("orchestration_v2_events"));
     assert.deepStrictEqual(yield* forkLedger, [
       { migration_id: 1, name: "ForkUpstreamIdCompatibility" },
@@ -135,12 +140,12 @@ it.effect("leaves a migration from a newer build recorded", () =>
     yield* runMigrations();
     yield* sql`
       INSERT INTO effect_sql_migrations (migration_id, name)
-      VALUES (57, 'AMigrationThisBuildHasNeverHeardOf')
+      VALUES (59, 'AMigrationThisBuildHasNeverHeardOf')
     `;
 
     assert.deepStrictEqual(yield* runMigrations(), []);
     assert.deepStrictEqual((yield* upstreamLedger).at(-1), {
-      migration_id: 57,
+      migration_id: 59,
       name: "AMigrationThisBuildHasNeverHeardOf",
     });
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

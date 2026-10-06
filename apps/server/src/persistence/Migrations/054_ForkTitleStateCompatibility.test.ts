@@ -25,6 +25,8 @@ it.effect("repairs a fork database that recorded migrations through 53", () =>
       [54, "ProjectionThreadsAutoSettleDisabledAt"],
       [55, "OrchestrationV2"],
       [56, "RemoveRedundantProjectionIndexes"],
+      [57, "ScheduledTaskWebhooks"],
+      [58, "WebhookRelayDeliveries"],
     ]);
 
     const threadColumns = yield* sql<{ readonly name: string }>`

@@ -12,6 +12,7 @@ import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
+  LAST_UPSTREAM_ID_AT_SPLIT,
   reconcileForkMigrationLedger,
   restoreUpstreamMigrationNames,
   runForkMigrations,
@@ -201,13 +202,20 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   // database for a test, so it stays out of all three.
   const includeForkMigrations = toMigrationInclusive === undefined;
   if (includeForkMigrations) {
-    yield* reconcileForkMigrationLedger(manifestNames);
+    yield* reconcileForkMigrationLedger();
   }
-  const executedMigrations = [
-    ...previewMigrations,
-    ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
-  ];
+  const executedMigrations = [...previewMigrations];
   if (includeForkMigrations) {
+    // Upstream's run is split at the fork's old boundary, because the repair
+    // chain has to land between the two halves. After upstream's 055: its gate
+    // asks the schema, which nothing has created before then. Before upstream's
+    // first migration above the split: 057 alters `scheduled_tasks`, and on a
+    // database whose ledger claims 055 under a fork name the repair is the only
+    // thing that creates it — run the other way round, upstream's own migration
+    // fails on a table that does not exist yet.
+    executedMigrations.push(
+      ...(yield* run({ loader: makeMigrationLoader(LAST_UPSTREAM_ID_AT_SPLIT) })),
+    );
     // Reported on their own, never folded into the return value: that list is
     // upstream's ledger, and these ids belong to another one.
     const forkMigrations = yield* runForkMigrations;
@@ -220,6 +228,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
       );
     }
   }
+  executedMigrations.push(...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })));
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
