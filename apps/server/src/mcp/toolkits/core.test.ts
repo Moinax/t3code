@@ -15,8 +15,8 @@ import {
   RunId,
   ThreadId,
   TurnItemId,
-  type OrchestrationV2Command,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -268,7 +268,7 @@ it("bounds public command rejections and redacts internal dispatch causes", () =
 });
 
 it.effect("renames the calling thread through the focused title tool", () => {
-  const commands: OrchestrationV2Command[] = [];
+  const commands: OrchestrationV2ServerCommand[] = [];
   const shell = {
     id: threadId,
     projectId: "mcp-core-project",
