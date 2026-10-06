@@ -11,6 +11,7 @@ import {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  type OrchestrationV2Command,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -253,6 +254,56 @@ it("bounds public command rejections and redacts internal dispatch causes", () =
     code: "orchestration_error",
     message: "The operation could not be completed.",
   });
+});
+
+it.effect("renames the calling thread through the focused title tool", () => {
+  const commands: OrchestrationV2Command[] = [];
+  const shell = {
+    id: threadId,
+    projectId: "mcp-core-project",
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    deletedAt: null,
+    archivedAt: null,
+    activeRunId: RunId.make("mcp-core-run"),
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  } as OrchestrationV2ThreadShell;
+
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* server
+      .callTool({ name: "set_thread_title", arguments: { title: "Investigate reconnects" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ sequence: 11 });
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({
+      type: "thread.metadata.update",
+      threadId,
+      title: "Investigate reconnects",
+    });
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: () => Effect.succeed(shell),
+            getProjectThreadRecords: () => Effect.succeed({ thread: shell } as never),
+            dispatch: (command) => {
+              commands.push(command);
+              return Effect.succeed({ sequence: 11 } as never);
+            },
+          }),
+        ),
+      ),
+    ),
+  );
 });
 
 it.effect("returns an HTML render reference that Codex and Claude tool rows both carry", () =>
