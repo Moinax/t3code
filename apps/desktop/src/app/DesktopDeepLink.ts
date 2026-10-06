@@ -56,7 +56,9 @@ export function parseDeepLink(rawUrl: string, schemes: readonly string[]): DeepL
     return null;
   }
 
-  const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
+  // Keep empty segments so doubled, leading, and trailing separators are
+  // rejected instead of silently normalizing a malformed link.
+  const segments = url.pathname.split("/").slice(1);
   if (segments.length !== 2) {
     return null;
   }
