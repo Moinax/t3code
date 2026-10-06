@@ -38,9 +38,12 @@ it.effect("creates the V2 schema on a fork database that recorded 55 and 56 itse
     // nothing the app reads from the new orchestrator exists yet.
     assert.deepStrictEqual(yield* v2Tables, []);
 
-    // The repair is the fork's, so upstream's ledger reports nothing: the ids
-    // this database holds already reach upstream's last migration.
-    assert.deepStrictEqual(yield* runMigrations(), []);
+    // The repair is the fork's, so upstream's ledger reports only what it has
+    // added above the ids this database holds, which reach its 56.
+    assert.deepStrictEqual(yield* runMigrations(), [
+      [57, "ScheduledTaskWebhooks"],
+      [58, "WebhookRelayDeliveries"],
+    ]);
     for (const table of V2_TABLES) {
       assert.ok((yield* v2Tables).includes(table), table);
     }
