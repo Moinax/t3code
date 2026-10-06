@@ -53,6 +53,9 @@ describe("parseDeepLink", () => {
   it("requires exactly two path segments", () => {
     expect(parseDeepLink("t3code://threads/env", SCHEMES)).toBeNull();
     expect(parseDeepLink("t3code://threads/env/thread/extra", SCHEMES)).toBeNull();
+    expect(parseDeepLink("t3code://threads//env/thread", SCHEMES)).toBeNull();
+    expect(parseDeepLink("t3code://threads/env//thread", SCHEMES)).toBeNull();
+    expect(parseDeepLink("t3code://threads/env/thread/", SCHEMES)).toBeNull();
     expect(parseDeepLink("t3code://threads", SCHEMES)).toBeNull();
   });
 
