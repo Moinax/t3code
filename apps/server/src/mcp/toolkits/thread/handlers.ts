@@ -324,8 +324,8 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       return { sequence: result.sequence };
     }),
   ),
-  // Every MCP token is scoped to one thread, so renaming the calling thread
-  // needs no threadId and no capability beyond write access to it.
+  // The focused tool intentionally exposes no threadId: thread-scoped callers
+  // rename themselves, while outside clients receive the standard target-required failure.
   set_thread_title: McpToolAccess.writesThreads(
     () => [undefined],
     (input) =>
