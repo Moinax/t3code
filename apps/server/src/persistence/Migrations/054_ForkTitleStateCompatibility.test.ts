@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-import { runMigrations } from "../Migrations.ts";
+import { migrationManifest, runMigrations } from "../Migrations.ts";
 import migrateMessageContext from "./053_ForkMessageContextCompatibility.ts";
 
 it.effect("repairs a fork database that recorded migrations through 53", () =>
@@ -21,13 +21,12 @@ it.effect("repairs a fork database that recorded migrations through 53", () =>
     `;
 
     const applied = yield* runMigrations();
-    assert.deepStrictEqual(applied, [
-      [54, "ProjectionThreadsAutoSettleDisabledAt"],
-      [55, "OrchestrationV2"],
-      [56, "RemoveRedundantProjectionIndexes"],
-      [57, "ScheduledTaskWebhooks"],
-      [58, "WebhookRelayDeliveries"],
-    ]);
+    // Read off the manifest: every upstream migration above the ids this
+    // database holds. Listing them breaks here whenever upstream adds one.
+    assert.deepStrictEqual(
+      applied,
+      migrationManifest.filter(([id]) => id > 53),
+    );
 
     const threadColumns = yield* sql<{ readonly name: string }>`
       PRAGMA table_info(projection_threads)

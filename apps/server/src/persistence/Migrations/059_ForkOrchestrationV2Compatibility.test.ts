@@ -3,10 +3,14 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-import { runMigrations } from "../Migrations.ts";
+import { LAST_UPSTREAM_ID_AT_SPLIT } from "../ForkMigrations.ts";
+import { migrationManifest, runMigrations } from "../Migrations.ts";
 import repairForkHistory from "./058_ForkAutoSettleDisabledAtCompatibility.ts";
 
 const V2_TABLES = ["orchestration_v2_events", "orchestration_v2_projection_threads"] as const;
+
+/** Read off the manifest, so upstream's next migration does not fail this test. */
+const upstreamAboveSplit = migrationManifest.filter(([id]) => id > LAST_UPSTREAM_ID_AT_SPLIT);
 
 const v2Tables = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -40,10 +44,7 @@ it.effect("creates the V2 schema on a fork database that recorded 55 and 56 itse
 
     // The repair is the fork's, so upstream's ledger reports only what it has
     // added above the ids this database holds, which reach its 56.
-    assert.deepStrictEqual(yield* runMigrations(), [
-      [57, "ScheduledTaskWebhooks"],
-      [58, "WebhookRelayDeliveries"],
-    ]);
+    assert.deepStrictEqual(yield* runMigrations(), upstreamAboveSplit);
     for (const table of V2_TABLES) {
       assert.ok((yield* v2Tables).includes(table), table);
     }
