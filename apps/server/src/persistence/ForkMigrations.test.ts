@@ -3,7 +3,19 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
+import { LAST_UPSTREAM_ID_AT_SPLIT } from "./ForkMigrations.ts";
 import { migrationManifest, runMigrations } from "./Migrations.ts";
+
+/**
+ * Upstream's migrations above the split, read off the manifest.
+ *
+ * Listing them instead breaks every one of these tests the next time upstream
+ * adds a migration, for a reason that has nothing to do with what they assert.
+ */
+const upstreamAboveSplit = migrationManifest.filter(([id]) => id > LAST_UPSTREAM_ID_AT_SPLIT);
+
+/** An id no build can hold, so the row stands for a database written by a newer one. */
+const newerBuildId = Math.max(...migrationManifest.map(([id]) => id)) + 1;
 
 const upstreamLedger = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -80,10 +92,7 @@ it.effect("hands upstream back the ids a pre-split fork database took", () =>
     // The ids the fork took past the split are released, so upstream's own
     // migrations above it run instead of being skipped for sitting under one
     // of them. The repair is recognised from the row upstream's ledger carries.
-    assert.deepStrictEqual(yield* runMigrations(), [
-      [57, "ScheduledTaskWebhooks"],
-      [58, "WebhookRelayDeliveries"],
-    ]);
+    assert.deepStrictEqual(yield* runMigrations(), upstreamAboveSplit);
     assert.deepStrictEqual(yield* forkLedger, [
       { migration_id: 1, name: "ForkUpstreamIdCompatibility" },
     ]);
@@ -121,10 +130,7 @@ it.effect("still repairs a pre-split database that stopped before the repair", (
     // Upstream's run reports only the migrations it has added above the ids
     // this database holds, while the fork's repair is what creates the schema
     // it was missing.
-    assert.deepStrictEqual(yield* runMigrations(), [
-      [57, "ScheduledTaskWebhooks"],
-      [58, "WebhookRelayDeliveries"],
-    ]);
+    assert.deepStrictEqual(yield* runMigrations(), upstreamAboveSplit);
     assert.ok((yield* v2Tables).includes("orchestration_v2_events"));
     assert.deepStrictEqual(yield* forkLedger, [
       { migration_id: 1, name: "ForkUpstreamIdCompatibility" },
@@ -140,12 +146,12 @@ it.effect("leaves a migration from a newer build recorded", () =>
     yield* runMigrations();
     yield* sql`
       INSERT INTO effect_sql_migrations (migration_id, name)
-      VALUES (59, 'AMigrationThisBuildHasNeverHeardOf')
+      VALUES (${newerBuildId}, 'AMigrationThisBuildHasNeverHeardOf')
     `;
 
     assert.deepStrictEqual(yield* runMigrations(), []);
     assert.deepStrictEqual((yield* upstreamLedger).at(-1), {
-      migration_id: 59,
+      migration_id: newerBuildId,
       name: "AMigrationThisBuildHasNeverHeardOf",
     });
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
