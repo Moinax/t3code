@@ -288,7 +288,7 @@ it.effect("renames the calling thread through the focused title tool", () => {
     });
   }).pipe(
     Effect.provide(
-      McpHttpServer.layerThreadToolkit.pipe(
+      layerThreadToolkit.pipe(
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(
