@@ -31,7 +31,7 @@ import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { getDriverOption } from "../settings/providerDriverMeta";
+import { providerClients } from "../settings/providerDriverMeta";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -370,7 +370,7 @@ export function buildUsageLimitsHoverRows(
   return providersWithLimits(providers).flatMap((provider) => {
     const limits = provider.usageLimits;
     if (!limits) return [];
-    const driverLabel = getDriverOption(provider.driver)?.label ?? String(provider.driver);
+    const driverLabel = providerClients.get(provider.driver)?.label ?? String(provider.driver);
     return [
       {
         key: `${primaryEnvironmentId}:${provider.instanceId}`,
