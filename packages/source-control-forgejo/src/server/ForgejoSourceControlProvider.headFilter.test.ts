@@ -4,9 +4,10 @@ import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/process";
 import * as FileSystem from "effect/FileSystem";
 
+import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
+
 import * as ForgejoCli from "./ForgejoCli.ts";
 import * as ForgejoSourceControlProvider from "./ForgejoSourceControlProvider.ts";
-import * as VcsProcess from "../vcs/VcsProcess.ts";
 
 const output = (stdout: string) => ({
   exitCode: ChildProcessSpawner.ExitCode(0),
@@ -39,7 +40,7 @@ function makeProvider(cli: Partial<ForgejoCli.ForgejoCli["Service"]>) {
             }),
           ...cli,
         }),
-        Layer.mock(VcsProcess.VcsProcess)({}),
+        TestSourceControlHost.layer({ process: {} }),
         FileSystem.layerNoop({}),
       ),
     ),
