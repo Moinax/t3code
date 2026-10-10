@@ -1,0 +1,24 @@
+diff --git a/android/CMakeLists.txt b/android/CMakeLists.txt
+index 005caaf255529389c2684dbe8fbf0cb099d80e97..978b90b55ddac07d6fe2ea8c493768b2964a27ea 100644
+--- a/android/CMakeLists.txt
++++ b/android/CMakeLists.txt
+@@ -8,5 +8,19 @@ find_library(LOG_LIB log)
+ find_library(ONIG_LIB onig
+     PATHS ${CMAKE_CURRENT_SOURCE_DIR}/src/main/jniLibs/${ANDROID_ABI}
+     NO_CMAKE_FIND_ROOT_PATH
++    # PATHS is the LAST place find_library looks — after the CMAKE_SYSTEM paths
++    # — and NO_CMAKE_FIND_ROOT_PATH above lifts the sysroot confinement that
++    # would otherwise hide those. So on a build host that has oniguruma (jq,
++    # bat, git-delta and yazi all depend on it, so most Linux dev machines do)
++    # the host's x86-64 /usr/lib/libonig.so wins over the Android prebuilt
++    # sitting right there, and the link fails with "ld.lld: error:
++    # /usr/lib/libonig.so is incompatible with aarch64linux". CI does not see
++    # it because its images have no oniguruma.
++    #
++    # The prebuilt is the only correct answer for a cross-compile, so search
++    # nowhere else: with NO_DEFAULT_PATH, PATHS is all that is searched, and
++    # REQUIRED below turns a genuinely missing prebuilt into a clear failure
++    # rather than a silent fallback to whatever the host has.
++    NO_DEFAULT_PATH
+     REQUIRED
+ )
