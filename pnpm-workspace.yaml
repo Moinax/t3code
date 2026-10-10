@@ -335,6 +335,8 @@ patchedDependencies:
   # Android: Maven-resolved gradle plugins (expo-widgets) have no sourceDir; without this
   # skip, the fingerprint silently drops every Expo native module and OTAs reach stale binaries.
   "@expo/fingerprint@0.21.5": patches/@expo__fingerprint@0.21.5.patch
+  # Android: find_library picks the build host's x86-64 libonig over the bundled Android prebuilt.
+  react-native-shiki-engine@0.3.12: patches/react-native-shiki-engine@0.3.12.patch
 
 peerDependencyRules:
   allowAny:
