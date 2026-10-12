@@ -338,8 +338,8 @@ const startup = Effect.gen(function* () {
   yield* updates.configure;
   yield* DesktopRemoteUpdates.listen;
   yield* linuxUrlHandler.register;
-  // Registered before bootstrap so a link that launched the app is picked up
-  // and held, rather than being missed while the backend starts.
+  // Listen before bootstrap so a socket link received during backend startup
+  // is held rather than missed.
   yield* deepLinkRouter.register;
   yield* bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause)));
 }).pipe(Effect.withSpan("desktop.startup"));

@@ -202,7 +202,7 @@ function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
       icon={
         <>
           {running ? (
-            <RefreshCwIcon aria-hidden="true" className="motion-safe:animate-spin" />
+            <RefreshCwIcon aria-hidden="true" />
           ) : (
             <GitCommitHorizontalIcon />
           )}

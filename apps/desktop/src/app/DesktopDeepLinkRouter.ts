@@ -10,23 +10,16 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
-import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopDeepLink from "./DesktopDeepLink.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 
-// Delivers `t3code://` links to the renderer.
-//
-// The two platforms hand the URL over differently:
-//   * macOS emits `open-url` — the URL never appears in argv.
-//   * Windows/Linux pass it as a command-line argument, both on first launch
-//     and, for an already-running app, via `second-instance`.
-//
-// Both paths funnel into the same DesktopWindow.dispatchDeepLink, which owns
-// window creation, the wait for the first renderer load, and the hold-until-
-// backend-ready behaviour.
+// Delivers thread links received through the fork's low-latency local socket.
+// OS-delivered links belong to DesktopClerk and DesktopWebLinks, which also
+// preserve prompt-link query parameters. Keeping the socket as the only input
+// here prevents a thread link from racing through two renderer channels.
 
 const { logInfo, logWarning } = makeComponentLogger("desktop-deep-link-router");
 
@@ -75,7 +68,6 @@ export class DesktopDeepLinkRouter extends Context.Service<
 >()("@t3tools/desktop/app/DesktopDeepLinkRouter") {}
 
 export const make = Effect.gen(function* () {
-  const electronApp = yield* ElectronApp.ElectronApp;
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const context = yield* Effect.context<DesktopWindow.DesktopWindow>();
@@ -83,10 +75,7 @@ export const make = Effect.gen(function* () {
 
   const schemes = [ElectronProtocol.getDesktopScheme(environment.isDevelopment)];
 
-  const handle = (
-    rawUrl: string,
-    source: "open-url" | "second-instance" | "launch-argv" | "socket",
-  ) => {
+  const handle = (rawUrl: string) => {
     const target = DesktopDeepLink.parseDeepLink(rawUrl, schemes);
     if (target === null) {
       // Not ours to act on: OAuth callbacks and the renderer bundle URL also
@@ -95,12 +84,12 @@ export const make = Effect.gen(function* () {
     }
     void runPromise(
       Effect.gen(function* () {
-        yield* logInfo("received deep link", { source, kind: target.kind });
+        yield* logInfo("received deep link", { source: "socket", kind: target.kind });
         yield* desktopWindow.dispatchDeepLink(target);
       }).pipe(
-        // A malformed link must never take down the app.
+        // A failed delivery must never take down the app.
         Effect.catchCause((cause) =>
-          Effect.logWarning("failed to dispatch deep link", { source, cause }),
+          Effect.logWarning("failed to dispatch deep link", { source: "socket", cause }),
         ),
       ),
     );
@@ -149,7 +138,7 @@ export const make = Effect.gen(function* () {
           });
           connection.on("close", () => {
             const url = received.split("\n", 1)[0]?.trim() ?? "";
-            if (url.length > 0) handle(url, "socket");
+            if (url.length > 0) handle(url);
           });
           connection.on("error", () => connection.destroy());
         });
@@ -209,31 +198,6 @@ export const make = Effect.gen(function* () {
 
   const register = Effect.gen(function* () {
     yield* listenOnSocket;
-
-    // Typed structurally so this module keeps talking to Electron only through
-    // the ElectronApp service, as the rest of the app does.
-    yield* electronApp.on<[{ preventDefault: () => void }, string]>("open-url", (event, url) => {
-      event.preventDefault();
-      handle(url, "open-url");
-    });
-
-    // A second `second-instance` listener alongside the one that reveals the
-    // window: Electron invokes every registered listener, so window reveal and
-    // link routing stay owned by their respective modules.
-    yield* electronApp.on<[unknown, readonly string[], string]>(
-      "second-instance",
-      (_event, argv) => {
-        const url = DesktopDeepLink.findDeepLinkInArgv(argv ?? [], schemes);
-        if (url !== null) handle(url, "second-instance");
-      },
-    );
-
-    // Windows/Linux cold start: the link that launched the app is already in
-    // our own argv, and no event will ever be emitted for it.
-    const launchUrl = DesktopDeepLink.findDeepLinkInArgv(process.argv, schemes);
-    if (launchUrl !== null) {
-      handle(launchUrl, "launch-argv");
-    }
   }).pipe(Effect.withSpan("desktop.deepLinkRouter.register"));
 
   return DesktopDeepLinkRouter.of({ register });
