@@ -60,6 +60,22 @@ function savePreparedUpdate(config, state) {
   NodeFS.writeFileSync(temp, JSON.stringify(state), { mode: 0o600 });
   NodeFS.renameSync(temp, file);
 }
+// A run clones the repo and installs into its own work directory, so each one
+// costs several gigabytes — and nothing reads it again once the update it
+// prepared is installed, which is exactly when prepared.json goes away. The one
+// exception is a run still prepared: compareLocalBuild() diffs against its .git.
+// So keep that one, keep the run starting now, and drop every other.
+export async function pruneWorkDirs(config, keep) {
+  const root = NodePath.join(config.stateDir, "work");
+  const stale = (await NodeFSP.readdir(root).catch(() => [])).filter(
+    (entry) => !keep.includes(entry),
+  );
+  // One at a time: these are multi-gigabyte trees, and unlinking them in
+  // parallel only puts the disk in contention with the clone that follows.
+  for (const entry of stale)
+    await NodeFSP.rm(NodePath.join(root, entry), { recursive: true, force: true });
+  return stale;
+}
 export async function readPreparedUpdate(config) {
   // Older installed runners only write status.json, including after a later upstream update.
   let prepared = readState(config);
@@ -712,6 +728,10 @@ async function main() {
   const runId = NodeCrypto.randomUUID();
   const workDir = NodePath.join(config.stateDir, "work", runId);
   NodeFS.mkdirSync(NodePath.dirname(workDir), { recursive: true });
+  // Before this run clones, not after it succeeds: a failed run's tree then
+  // stays inspectable until the next run starts, and the disk is reclaimed
+  // either way. $runId cannot collide, but name it rather than rely on that.
+  await pruneWorkDirs(config, [previous?.runId, runId]);
   let state = {
     ...empty(),
     source: action === "run-local" ? "local" : "upstream",

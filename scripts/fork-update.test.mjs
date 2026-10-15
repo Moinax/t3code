@@ -18,6 +18,7 @@ import {
   saveState,
   readState,
   readUpdateLog,
+  pruneWorkDirs,
 } from "./fork-update.mjs";
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
 
@@ -643,3 +644,22 @@ NodeTest.test(
     NodeAssert.match(text, /Resolved the conflict/);
   },
 );
+
+NodeTest.test("pruning work directories keeps the prepared run and the one starting", async (t) => {
+  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3fork-prune-"));
+  t.after(() => NodeFSP.rm(root, { recursive: true, force: true }));
+  const config = { stateDir: root };
+  const work = NodePath.join(root, "work");
+  for (const run of ["prepared", "current", "stale-one", "stale-two"])
+    await NodeFSP.mkdir(NodePath.join(work, run, "node_modules"), { recursive: true });
+  await NodeFSP.writeFile(NodePath.join(work, "stale-one", "node_modules", "big"), "x");
+
+  const removed = await pruneWorkDirs(config, ["prepared", "current"]);
+
+  NodeAssert.deepEqual(removed.sort(), ["stale-one", "stale-two"]);
+  NodeAssert.deepEqual((await NodeFSP.readdir(work)).sort(), ["current", "prepared"]);
+  // No prepared update means no run to spare, and a missing work/ is not an error.
+  NodeAssert.deepEqual(await pruneWorkDirs(config, [undefined, "current"]), ["prepared"]);
+  await NodeFSP.rm(work, { recursive: true, force: true });
+  NodeAssert.deepEqual(await pruneWorkDirs(config, ["current"]), []);
+});
