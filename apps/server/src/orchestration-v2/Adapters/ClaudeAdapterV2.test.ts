@@ -13943,13 +13943,17 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.equal(harness.offeredMessages.length, offered + 1);
           assert.equal(harness.offeredMessages.at(-1)?.priority, "now");
           if (backgrounding === "never answers") {
+            const clock = yield* Clock.Clock;
+            const immediateClock = {
+              ...clock,
+              sleep: () => Effect.void,
+            } satisfies Clock.Clock;
             for (let repeat = 1; repeat <= 2; repeat++) {
-              const again = yield* Effect.forkScoped(steer);
-              for (let tick = 0; tick < 100 && again.pollUnsafe() === undefined; tick++) {
-                yield* TestClock.adjust("1 second");
-                yield* Effect.yieldNow;
-              }
-              assert.isTrue(Exit.isSuccess(yield* Fiber.await(again)));
+              const again = yield* steer.pipe(
+                Effect.provideService(Clock.Clock, immediateClock),
+                Effect.exit,
+              );
+              assert.isTrue(Exit.isSuccess(again));
               assert.equal(harness.offeredMessages.length, offered + 1 + repeat);
             }
             assert.deepEqual(calls, [FOREGROUND_TOOL_USE_ID]);
