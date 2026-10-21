@@ -12,6 +12,7 @@ import {
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
   resolveSidebarRowThreadId,
+  isGroupJoinHover,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   resolveProjectStatusIndicator,
@@ -23,6 +24,12 @@ import {
   shouldRecedeSidebarThread,
   sortInboxThreadsByReturn,
   resolveSidebarDropTarget,
+  resolveSidebarGroupDropTarget,
+  planSidebarGroupMove,
+  planSidebarThreadMove,
+  resolveSidebarInsertAnchor,
+  sidebarListItemId,
+  sidebarMarkerId,
   planSidebarThreadDrop,
   resolveSidebarReorderableThreadKeys,
   sortPinnedThreadsForSidebar,
@@ -1159,6 +1166,114 @@ describe("Working shelf (beta)", () => {
       row("s1", "settled"),
     ];
 
+    it("moves a group as the block of its members, and only inside the inbox", () => {
+      const group = (memberKeys: readonly string[]): SidebarListItem => ({
+        kind: "group",
+        groupKey: "CI-1",
+        section: "active",
+        memberKeys,
+      });
+      const grouped: readonly SidebarListItem[] = [
+        marker("pinned-header"),
+        row("p1", "pinned"),
+        marker("pinned-divider"),
+        row("a1", "active"),
+        group(["g1", "g2"]),
+        row("g1", "active"),
+        row("g2", "active"),
+        row("a2", "active"),
+        marker("settled-header"),
+        row("s1", "settled"),
+      ];
+      // Above the row it was dropped on, members in their own order.
+      expect(resolveSidebarGroupDropTarget(grouped, "CI-1", "a1")).toEqual({
+        section: "active",
+        pinnedOrder: ["p1"],
+        activeOrder: ["g1", "g2", "a1", "a2"],
+      });
+      // The group's own rows move with it, so they are no place to drop it.
+      expect(resolveSidebarGroupDropTarget(grouped, "CI-1", "g2")).toBeNull();
+      // Pinning or settling a group is not a drag.
+      expect(resolveSidebarGroupDropTarget(grouped, "CI-1", "p1")).toBeNull();
+      expect(resolveSidebarGroupDropTarget(grouped, "CI-1", "s1")).toBeNull();
+    });
+
+    it("moves a folded group, whose members have no rows of their own", () => {
+      const folded: readonly SidebarListItem[] = [
+        marker("pinned-header"),
+        marker("pinned-divider"),
+        row("a1", "active"),
+        row("a2", "active"),
+        { kind: "group", groupKey: "CI-1", section: "active", memberKeys: ["g1", "g2"] },
+        marker("settled-header"),
+      ];
+      const plan = planSidebarGroupMove(folded, "CI-1", "a1");
+      // The hidden members take the slot the row landed on.
+      expect(plan?.target.activeOrder).toEqual(["g1", "g2", "a1", "a2"]);
+      // And the arrangement is the list itself, which is what animates the rows.
+      expect(plan?.items.map((item) => (item.kind === "thread" ? item.key : item.kind))).toEqual([
+        "marker",
+        "marker",
+        "group",
+        "a1",
+        "a2",
+        "marker",
+      ]);
+    });
+
+    it("orders a thread against the members a fold has hidden", () => {
+      const folded: readonly SidebarListItem[] = [
+        marker("pinned-header"),
+        marker("pinned-divider"),
+        row("a1", "active"),
+        { kind: "group", groupKey: "CI-1", section: "active", memberKeys: ["g1", "g2"] },
+        marker("settled-header"),
+      ];
+      // Without the hidden members the order would read ["a1"] wherever the
+      // thread landed, so the drop would have nothing to place it against.
+      expect(resolveSidebarDropTarget(folded, "a1", sidebarMarkerId("settled-header"))).toEqual({
+        section: "settled",
+        pinnedOrder: [],
+        activeOrder: ["g1", "g2"],
+      });
+      const group = {
+        kind: "group" as const,
+        groupKey: "CI-1",
+        section: "active" as const,
+        memberKeys: ["g1", "g2"],
+      };
+      expect(
+        resolveSidebarDropTarget(
+          [...folded.slice(0, 2), group, row("a1", "active"), folded[4]!],
+          "a1",
+          sidebarListItemId(group),
+        ),
+      ).toEqual({
+        section: "active",
+        pinnedOrder: [],
+        activeOrder: ["a1", "g1", "g2"],
+      });
+    });
+
+    it("names the row a release lands against, on the right side of it", () => {
+      const list: readonly SidebarListItem[] = [
+        marker("pinned-header"),
+        marker("pinned-divider"),
+        row("a1", "active"),
+        { kind: "group", groupKey: "CI-1", section: "active", memberKeys: ["g1", "g2"] },
+        row("a2", "active"),
+        marker("settled-header"),
+      ];
+      const ontoGroup = planSidebarThreadMove(list, "a2", sidebarListItemId(list[3]!));
+      expect(resolveSidebarInsertAnchor(ontoGroup!.items, "a2")).toEqual({
+        id: sidebarListItemId(list[3]!),
+        side: "above",
+      });
+      // Last of its section: the line goes under the row before it instead.
+      const toEnd = planSidebarThreadMove(list, "a1", sidebarMarkerId("settled-header"));
+      expect(resolveSidebarInsertAnchor(toEnd!.items, "a1")?.side).toBe("below");
+    });
+
     it("never drops into the Working shelf, and keeps it out of the inbox order", () => {
       expect(resolveSidebarDropTarget(items, "a1", "w1")).toBeNull();
       expect(resolveSidebarDropTarget(items, "p1", "a2")).toEqual({
@@ -1708,5 +1823,23 @@ describe("shouldCreateNewThreadInCurrentProject", () => {
     expect(shouldCreateNewThreadInCurrentProject(false, 1, 3)).toBe(true);
     expect(shouldCreateNewThreadInCurrentProject(false, 0, 0)).toBe(true);
     expect(shouldCreateNewThreadInCurrentProject(true, 2, 2)).toBe(true);
+  });
+});
+
+describe("isGroupJoinHover", () => {
+  const row = { activeHeight: 80, overTop: 100, overHeight: 80 };
+
+  it("joins when the dragged row sits over the middle of the one it hovers", () => {
+    expect(isGroupJoinHover({ ...row, activeTop: 100 })).toBe(true);
+    expect(isGroupJoinHover({ ...row, activeTop: 115 })).toBe(true);
+  });
+
+  it("inserts when it sits near an edge", () => {
+    expect(isGroupJoinHover({ ...row, activeTop: 130 })).toBe(false);
+    expect(isGroupJoinHover({ ...row, activeTop: 70 })).toBe(false);
+  });
+
+  it("never joins a row with no height", () => {
+    expect(isGroupJoinHover({ ...row, activeTop: 100, overHeight: 0 })).toBe(false);
   });
 });

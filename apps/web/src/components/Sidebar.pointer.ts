@@ -12,6 +12,12 @@ type Options = {
   onDrop?: (point: { x: number; y: number }) => boolean;
 };
 
+const sensorTrace = (reason: string) => {
+  const buffer = ((globalThis as unknown as { __dnd?: unknown[] }).__dnd ??= []);
+  buffer.push(["sensor", reason]);
+  if (buffer.length > 200) buffer.shift();
+};
+
 export class SidebarPointerSensor {
   static activators = [
     {
@@ -35,15 +41,27 @@ export class SidebarPointerSensor {
     this.document.addEventListener("pointercancel", this.pointerCancel, { capture: true });
     this.document.addEventListener("keydown", this.keydown, { capture: true });
     this.document.addEventListener("visibilitychange", this.visibilityChange);
-    this.window.addEventListener("blur", this.cancel);
-    this.window.addEventListener("pagehide", this.cancel);
-    this.window.addEventListener("resize", this.cancel);
+    this.window.addEventListener("blur", this.onBlur);
+    this.window.addEventListener("pagehide", this.onPageHide);
+    this.window.addEventListener("resize", this.onResize);
     this.document.addEventListener("dragstart", this.preventDefault);
     this.document.addEventListener("contextmenu", this.preventDefault);
     props.options.onAttach(this);
     props.onPending(props.active, { distance: props.options.distance }, this.coordinates());
   }
 
+  private onBlur = () => {
+    sensorTrace("blur");
+    this.cancel();
+  };
+  private onPageHide = () => {
+    sensorTrace("pagehide");
+    this.cancel();
+  };
+  private onResize = () => {
+    sensorTrace("resize");
+    this.cancel();
+  };
   private coordinates = () => ({ x: this.pointer.clientX, y: this.pointer.clientY });
   private preventDefault = (event: Event) => event.preventDefault();
   private clearClickSuppression = () => {
@@ -61,6 +79,7 @@ export class SidebarPointerSensor {
     const coordinates = { x: event.clientX, y: event.clientY };
     // Desktop may report buttons=0 before pointerup; drop active context drags before cancelling sort.
     if ((event.buttons & 1) === 0) {
+      sensorTrace("buttons-zero");
       if (this.phase === "dragging") this.props.options.onDrop?.(coordinates);
       return this.cancel();
     }
@@ -93,21 +112,34 @@ export class SidebarPointerSensor {
 
   private end = (event: PointerEvent) => {
     if (event.pointerId !== this.pointer.pointerId) return;
+    sensorTrace("pointerup");
     const dropped =
       this.phase === "dragging" &&
       this.props.options.onDrop?.({ x: event.clientX, y: event.clientY }) === true;
     this.finish(dropped);
   };
   private pointerCancel = (event: PointerEvent) => {
-    if (event.pointerId === this.pointer.pointerId) this.cancel();
+    if (event.pointerId === this.pointer.pointerId) {
+      sensorTrace("pointercancel");
+      this.cancel();
+    }
   };
   private keydown = (event: KeyboardEvent) => {
-    if (event.code === "Escape") this.cancel();
+    if (event.code === "Escape") {
+      sensorTrace("escape");
+      this.cancel();
+    }
   };
   private visibilityChange = () => {
-    if (this.document.hidden) this.cancel();
+    if (this.document.hidden) {
+      sensorTrace("hidden");
+      this.cancel();
+    }
   };
-  cancel = () => this.finish(true);
+  cancel = () => {
+    sensorTrace("cancel");
+    this.finish(true);
+  };
 
   private finish(cancelled: boolean) {
     if (this.phase === "finished") return;
@@ -118,9 +150,9 @@ export class SidebarPointerSensor {
     this.document.removeEventListener("pointercancel", this.pointerCancel, { capture: true });
     this.document.removeEventListener("keydown", this.keydown, { capture: true });
     this.document.removeEventListener("visibilitychange", this.visibilityChange);
-    this.window.removeEventListener("blur", this.cancel);
-    this.window.removeEventListener("pagehide", this.cancel);
-    this.window.removeEventListener("resize", this.cancel);
+    this.window.removeEventListener("blur", this.onBlur);
+    this.window.removeEventListener("pagehide", this.onPageHide);
+    this.window.removeEventListener("resize", this.onResize);
     this.document.removeEventListener("dragstart", this.preventDefault);
     this.document.removeEventListener("contextmenu", this.preventDefault);
     this.document.removeEventListener("selectionchange", this.clearSelection);

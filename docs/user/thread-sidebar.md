@@ -128,6 +128,28 @@ rename a thread, regenerate its title, or link and unlink a pull request. These 
 appear on web, desktop, and mobile without requiring the originating browser to remain
 open.
 
+### Group the threads of one ticket
+
+On web and desktop, threads whose titles start with the same ticket id — `CI-6305: Save payroll
+IDs`, `CI-6305 anorak: bulk endpoint` — are gathered under a row of their own in the active list,
+whichever projects they belong to. Click that row to fold the group away, and again to bring it
+back; the thread you have open stays visible either way.
+
+To group threads yourself, select them, right-click and choose **Group**, or drag one thread onto
+the **middle** of another — the edges of a row still mean "insert here". Dropping a thread onto a
+group's row adds it to that group; a thread already in a group only takes insertions. Right-click
+a group's row to **Rename group** or to **Ungroup**; a thread's own menu has **Remove from group**.
+
+What you do by hand wins over what the titles say: a thread you drop into a group stays there, one
+you take out stays out, and renaming a ticket's group makes it yours under the name it already had.
+Threads created later still join their ticket on their own, and a group left with one thread is
+dropped. Groups you make, and the groups you have folded, are kept on this device.
+
+A ticket's threads share one live section: a thread that needs an approval or an answer brings the
+whole ticket back to the active list, and one thread still working keeps the ticket in the Working
+section with it. Pinning, snoozing or settling acts on that thread alone, and takes it out of its
+group.
+
 ### Fold working threads (beta)
 
 Threads that are working or waiting on work they will resume from move into a collapsed
@@ -135,7 +157,8 @@ Threads that are working or waiting on work they will resume from move into a co
 That includes subagents, watched pull requests, and background commands or monitors the agent
 says it is waiting on. A dev server or other process an agent leaves running does not keep a thread
 there. A thread returns to the top of the active list when it finishes, fails, or needs an approval or
-answer. The Working section lists the thread you last sent work to first. Pinned threads stay in
+answer — unless it belongs to a ticket whose other threads are still working, in which case it waits
+for them. The Working section lists the thread you last sent work to first. Pinned threads stay in
 the pinned section.
 
 This is on by default. Turn it off with **Settings → General → Working section** on web and desktop,

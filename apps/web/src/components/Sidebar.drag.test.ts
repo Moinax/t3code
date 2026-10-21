@@ -38,9 +38,11 @@ function layout(
     const height =
       item.kind === "thread"
         ? (item.section === "pinned" || item.section === "active" ? cardHeight : 36) * scale
-        : item.marker === "pinned-header" || item.marker === "pinned-divider"
-          ? 0
-          : (item.marker.endsWith("placeholder") ? 0 : 32) * scale;
+        : item.kind === "group"
+          ? 32 * scale
+          : item.marker === "pinned-header" || item.marker === "pinned-divider"
+            ? 0
+            : (item.marker.endsWith("placeholder") ? 0 : 32) * scale;
     const rect = { top, height, bottom: top + height, left: 0, right: 260, width: 260 };
     top += height + 1;
     return rect;
@@ -295,6 +297,36 @@ describe("sidebar drag projection", () => {
     settledHeader,
     thread("s1", "settled"),
   ];
+
+  it("moves a folded group as a block, and makes room for a thread at its slot", () => {
+    const group = {
+      kind: "group" as const,
+      groupKey: "CI-1",
+      section: "active" as const,
+      memberKeys: ["g1", "g2"],
+    };
+    const items: readonly SidebarListItem[] = [
+      pinnedHeader,
+      divider,
+      thread("a1", "active"),
+      group,
+      thread("a2", "active"),
+      settledHeader,
+    ];
+    const input = { items, settledOrder: [], settledExpanded: true };
+
+    // The group's own row follows the pointer; the row it passes makes room.
+    const dragged = preview(input, sidebarListItemId(group), "a1");
+    expect(dragged.get(sidebarListItemId(group))).toEqual(stationary);
+    expect(dragged.get("a1")).toEqual({ ...stationary, y: 33 });
+
+    // And the group's row travels with the arrangement instead of staying put
+    // while the list opens around it: a thread taking the top pushes it down
+    // by its own height, like every row it sits among.
+    const insert = preview(input, "a2", "a1");
+    expect(insert.get("a1")).toEqual({ ...stationary, y: 83 });
+    expect(insert.get(sidebarListItemId(group))).toEqual({ ...stationary, y: 83 });
+  });
 
   it("keeps the pinned header above the gap when a lower pin moves to the top", () => {
     const result = preview(

@@ -137,6 +137,8 @@ export function useThreadActionMenu(input: {
         canFind: onFind !== undefined,
         branch: thread.branch ?? null,
         projectFilter: null,
+        // Groups are a sidebar arrangement; this menu never shows one.
+        inGroup: false,
         isPinned: thread.pinnedAt != null,
         isSettled: supports.settlement && thread.settledOverride === "settled",
         autoSettleEnabled: thread.autoSettleDisabledAt == null,
