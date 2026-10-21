@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import type { PreviewCaptureFailureEncoded } from "./previewCapture.ts";
 
+import type { ForkUpdateAction, ForkUpdateState } from "./forkUpdate.ts";
 import { SnapShotSource } from "./chatAttachment.ts";
 import { EnvironmentId, PortSchema, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
@@ -1117,6 +1118,7 @@ export type DesktopDeepLinkTarget = {
 };
 
 export interface DesktopBridge {
+  forkUpdate?: (action: ForkUpdateAction) => Promise<ForkUpdateState>;
   getAppBranding: () => DesktopAppBranding | null;
   /** `null` until the desktop host has read the login shell's environment; ask again later. */
   getRelayTelemetryEnabled: () => boolean | null;

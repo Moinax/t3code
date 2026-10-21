@@ -1,4 +1,11 @@
-import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ChartNoAxesColumnIcon,
+  GitCommitHorizontalIcon,
+  RefreshCwIcon,
+  SettingsIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
 import { memo } from "react";
@@ -14,6 +21,9 @@ import {
 } from "../../navigationHistory";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
+import { useForkMaintenance, useForkMaintenanceMonitor } from "../../state/forkMaintenance";
+import { useForkUpdates } from "../../state/forkUpdates";
+import { summarizeForkUpdates } from "../../lib/forkUpdateSummary";
 import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
@@ -33,11 +43,13 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { UsageLimitsHoverCard } from "../usage/UsageLimits";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { readIssueListPreferences } from "../issue/issueListPreferences";
 import { IssueGlyph } from "../issue/issuePresentation";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
+import { SidebarForkUpdatePill } from "./SidebarForkUpdatePill";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
@@ -203,10 +215,12 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
 function SidebarUtilityItem({
   icon,
   label,
+  tooltip,
   onClick,
 }: {
   icon: ReactNode;
   label: string;
+  tooltip?: ReactNode;
   onClick: () => void;
 }) {
   return (
@@ -214,18 +228,60 @@ function SidebarUtilityItem({
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            <SidebarMenuButton
+              aria-label={label}
+              onClick={onClick}
+              size="icon"
+              className="relative overflow-visible"
+            >
               {icon}
             </SidebarMenuButton>
           }
         />
-        <TooltipPopup side="top">{label}</TooltipPopup>
+        <TooltipPopup side="top">{tooltip ?? label}</TooltipPopup>
       </Tooltip>
     </SidebarMenuItem>
   );
 }
 
+function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
+  const { data, error, loading } = useForkUpdates();
+  const maintenance = useForkMaintenance();
+  const summary = summarizeForkUpdates({
+    job: maintenance.state,
+    updates: data ? { count: data.count, nightly: data.nightly } : null,
+    checkFailed: !!error || !!maintenance.error,
+    loading,
+  });
+  return (
+    <SidebarUtilityItem
+      label={summary.label}
+      onClick={onClick}
+      icon={
+        <>
+          {summary.running ? <RefreshCwIcon aria-hidden="true" /> : <GitCommitHorizontalIcon />}
+          {summary.badge && (
+            <span
+              className={cn(
+                // `text-tone-foreground`, not `text-warning-foreground`: the latter
+                // is amber *text* for a plain surface, which on an amber disc is
+                // the same colour twice and leaves the count unreadable.
+                "absolute -right-1 -top-1 min-w-4 rounded-full px-1 text-center text-3xs font-semibold leading-4 tabular-nums text-tone-foreground ring-2 ring-sidebar-control-surface",
+                summary.tone === "success" ? "bg-success" : "bg-warning",
+              )}
+            >
+              {summary.badge}
+            </span>
+          )}
+        </>
+      }
+    />
+  );
+}
+
 const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
+  useForkMaintenanceMonitor();
+  const forkUpdateAvailable = useForkMaintenance((state) => state.state?.available);
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
   const gt = useGT();
@@ -303,12 +359,19 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label={gt("Usage")}
+            tooltip={<UsageLimitsHoverCard />}
             onClick={handleUsageClick}
           />
         </>
       )}
+      <ForkUpdatesUtilityItem
+        onClick={() => {
+          closeMobileSidebar();
+          void navigate({ to: "/fork-updates" });
+        }}
+      />
       <SidebarThreadUndoNotice />
-      <SidebarUpdatePill />
+      {!forkUpdateAvailable && <SidebarUpdatePill />}
     </SidebarMenu>
   );
 });
@@ -316,6 +379,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
     <SidebarFooter>
+      <SidebarForkUpdatePill />
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />
