@@ -11,6 +11,11 @@ const TEST_EXCLUDE = [
   "**/dist/**",
   "**/dist-electron/**",
   "**/.{idea,git,cache,output,temp}/**",
+  // Fork: scripts/fork-update.mjs is standalone (it must survive rebuilding
+  // the app mid-update), so its suite is node:test and the updater runs it
+  // itself with `node --test`. Vitest's default glob matches the filename
+  // but finds no suite in it, which failed the whole monorepo test run.
+  "**/fork-update.test.mjs",
 ];
 
 // Directories whose tests belong to a package's own test config. desktop also
