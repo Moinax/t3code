@@ -33,7 +33,16 @@ Threads don't require a project. Pick **No project** (or press `mod+alt+n` on we
 
 Enabled by default (**Settings → General → Working section**, per device). Unpinned threads that are actively running—or waiting on subagents, watched PRs, or monitors—collapse into a **Working** section below Active, and return to the top of Active when they finish, fail, or need input.
 
-While enabled, Active is sorted by most recent return (manual reordering is paused until you turn it off).
+While enabled, Active is sorted by most recent return (manual reordering is paused until you turn it off). A thread that belongs to a ticket whose other threads are still working waits in Working with them.
+
+### Group the threads of one ticket
+
+On web and desktop, threads whose titles start with the same ticket id — `CI-6305: Save payroll IDs`, `CI-6305 anorak: bulk endpoint` — are gathered under a row of their own in the active list, whichever projects they belong to. Click that row to fold the group away, and again to bring it back; the thread you have open stays visible either way.
+
+- **Group by hand**: Select threads, right-click and choose **Group**, or drag one thread onto the **middle** of another (the edges of a row still mean "insert here"). Dropping a thread onto a group's row adds it to that group; a thread already in a group only takes insertions.
+- **Manage**: Right-click a group's row to **Rename group** or **Ungroup**; a thread's own menu has **Remove from group**.
+- **Manual choices win**: A thread you drop into a group stays there, one you take out stays out, and renaming a ticket's group makes it yours under the name it already had. Threads created later still join their ticket on their own, and a group left with one thread is dropped. Groups you make, and the groups you have folded, are kept on this device.
+- **Shared section**: A thread that needs an approval or an answer brings the whole ticket back to Active, and one thread still working keeps the ticket in Working with it. Pinning, snoozing or settling acts on that thread alone, and takes it out of its group.
 
 ### Group threads by project (beta)
 

@@ -21,6 +21,7 @@ import {
   useSensors,
   type AutoScrollOptions,
   type DragEndEvent,
+  type DragMoveEvent,
   type DragOverEvent,
   type DragStartEvent,
   type Modifier,
@@ -104,7 +105,7 @@ import {
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
 import { isModelPickerOpen } from "../modelPickerVisibility";
-import { isMacPlatform } from "~/lib/utils";
+import { isMacPlatform, randomUUID } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
 import { configuredHostedAppUrl } from "../hostedPairing";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
@@ -194,17 +195,22 @@ import {
   ADD_PROJECT_SCOPE_ITEM_VALUE,
   filterSidebarProjectScopeItems,
   firstValidTimestampMs,
+  isGroupJoinHover,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   planSidebarThreadDrop,
+  sidebarGroupItemId,
+  sidebarGroupKeyFromItemId,
   reduceSidebarProjectScopeMenuState,
   resolveAdjacentThreadId,
   resolveSidebarSweepKeys,
   resolveSidebarDropTarget,
+  resolveSidebarGroupDropTarget,
   resolveSidebarDropVerb,
   resolveSidebarThreadSection,
   resolveSidebarReorderableThreadKeys,
+  resolveSidebarRowStatus,
   searchSidebarThreads,
   shouldCreateNewThreadInCurrentProject,
   resolveScopedNewThreadProjectRef,
@@ -221,6 +227,29 @@ import {
   type SidebarListItem,
   type SidebarSection,
 } from "./Sidebar.logic";
+import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
+import {
+  clusterThreadsByGroup,
+  cohereGroupSections,
+  layoutThreadGroups,
+  addManualGroup,
+  dropManualGroup,
+  manualGroupKey,
+  manualGroupNameOf,
+  planGroupDrop,
+  pruneManualGroups,
+  pruneUngroupedKeys,
+  removeFromManualGroups,
+  renameManualGroup,
+  suggestGroupName,
+  resolveGroupKey,
+  toggleCollapsedGroup,
+  ungroupedKeysWith,
+  ungroupedKeysWithout,
+  type ManualThreadGroup,
+  type ThreadGroup,
+  type ThreadGroupEntry,
+} from "@t3tools/client-runtime/state/thread-groups";
 import {
   createSidebarCollisionDetection,
   createSidebarSortingStrategy,
@@ -288,7 +317,9 @@ import {
 } from "./sidebar/SidebarProjectFolderHeader";
 import {
   SidebarDragBoundary,
+  SidebarGroupHeader,
   SidebarSectionHeader,
+  type SidebarGroupMember,
   SidebarSectionPlaceholder,
 } from "./sidebar/SidebarListMarkers";
 
@@ -353,6 +384,26 @@ const REVEAL_ROW_CLASS_NAME =
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
+const COLLAPSED_GROUPS_KEY = "t3code:sidebar:collapsed-groups:v1";
+const MANUAL_GROUPS_KEY = "t3code:sidebar:thread-groups:v1";
+const MANUAL_GROUPS_SCHEMA = Schema.Array(
+  Schema.Struct({
+    id: Schema.String,
+    name: Schema.String,
+    members: Schema.Array(Schema.String),
+  }),
+);
+const NO_MANUAL_GROUPS: readonly ManualThreadGroup[] = [];
+// Threads taken out of the group their title put them in. Stored apart from the
+// groups themselves because what it holds is the absence of a membership: the
+// group it refers to has no member list to be missing from.
+const UNGROUPED_THREADS_KEY = "t3code:sidebar:ungrouped-threads:v1";
+const UNGROUPED_THREADS_SCHEMA = Schema.Array(Schema.String);
+const NO_UNGROUPED_THREADS: readonly string[] = [];
+const COLLAPSED_GROUPS_SCHEMA = Schema.Array(Schema.String);
+/** Stable default, so an unfolded sidebar does not re-render on identity. */
+const NO_COLLAPSED_GROUPS: readonly string[] = [];
+const EMPTY_GROUP_MEMBERS: readonly SidebarGroupMember[] = [];
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -378,6 +429,9 @@ interface SidebarThreadPartitionInput {
   readonly workingShelfEnabled: boolean;
   /** Boring mode: folders list active threads by the user's latest message. */
   readonly sortActiveBySend: boolean;
+  // Which group a thread belongs to, hand-made groups included, so a group
+  // the user composed cohereres and clusters exactly like a ticket's.
+  readonly groupKeyOf: (thread: EnvironmentThreadShell) => string | null;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
   // on the clock, so the minute tick, the precise snooze-wake tick and the inbox
   // tracker's expiry version are inputs: a new key repartitions.
@@ -398,6 +452,13 @@ const NO_DRAGGED_ORDERS: {
   readonly activeOrder: readonly string[] | undefined;
 } = { settledOrder: NO_DRAGGED_ORDER, activeOrder: undefined };
 
+// TEMPORARY drag diagnostic: the dev server logs every request URL, so this is
+// a trace channel out of any browser, including one this agent cannot read.
+const dndTrace = (...entry: unknown[]) => {
+  const buffer = ((globalThis as unknown as { __dnd?: unknown[] }).__dnd ??= []);
+  buffer.push(entry);
+  if (buffer.length > 200) buffer.shift();
+};
 function resolveDraggedOrders(input: {
   readonly drag: { readonly activeKey: string; readonly occurredAt: string };
   readonly threadByKey: ReadonlyMap<string, EnvironmentThreadShell>;
@@ -502,6 +563,33 @@ function useSidebarThreads(input: {
   const settledVisibleCount =
     settledTail.scopeKey === projectScopeKey ? settledTail.count : SETTLED_TAIL_INITIAL_COUNT;
 
+  const [storedManualGroups, setManualGroups] = useLocalStorage(
+    MANUAL_GROUPS_KEY,
+    NO_MANUAL_GROUPS,
+    MANUAL_GROUPS_SCHEMA,
+  );
+  const [storedUngroupedThreads, setUngroupedThreads] = useLocalStorage(
+    UNGROUPED_THREADS_KEY,
+    NO_UNGROUPED_THREADS,
+    UNGROUPED_THREADS_SCHEMA,
+  );
+  // A thread deleted or archived elsewhere leaves its key behind; drop it, and
+  // the group it empties, before anything reads membership.
+  const liveThreadKeys = new Set(threads.map(threadShellKey));
+  const manualGroups = pruneManualGroups(storedManualGroups, liveThreadKeys);
+  const ungroupedThreads = pruneUngroupedKeys(storedUngroupedThreads, liveThreadKeys);
+  const ungroupedThreadKeys = new Set(ungroupedThreads);
+  // Boring mode's project folders already group the work, and a ticket spans projects.
+  const groupKeyOf = (thread: EnvironmentThreadShell) =>
+    folderGroups !== null
+      ? null
+      : resolveGroupKey({
+          manualGroups,
+          ungroupedThreadKeys,
+          threadKey: threadShellKey(thread),
+          title: thread.title,
+        });
+  const groupNameOf = (key: string) => manualGroupNameOf(manualGroups, key) ?? key;
   const partition = partitionSidebarThreads({
     threads,
     scopedProjectKeys,
@@ -511,6 +599,7 @@ function useSidebarThreads(input: {
     optimisticDrop,
     workingShelfEnabled,
     sortActiveBySend: folderGroups !== null,
+    groupKeyOf,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
 
@@ -548,6 +637,29 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
+  // Folding is per group, not per section, so a group stays folded as its
+  // threads move between Active and Working.
+  const [collapsedGroups, setCollapsedGroups] = useLocalStorage(
+    COLLAPSED_GROUPS_KEY,
+    NO_COLLAPSED_GROUPS,
+    COLLAPSED_GROUPS_SCHEMA,
+  );
+  const [activeEntries = [], workingEntries = []] = layoutThreadGroups({
+    sections: [activeThreads, visibleWorkingThreads],
+    groupKeyOf,
+    nameOf: groupNameOf,
+    collapsed: new Set(collapsedGroups),
+    keepThread: (thread) => threadShellKey(thread) === routeRowThreadKey,
+  });
+  const threadsOf = (entries: readonly ThreadGroupEntry<EnvironmentThreadShell>[]) =>
+    entries.flatMap((entry) => (entry.kind === "thread" ? [entry.thread] : []));
+  const renderedActiveThreads = threadsOf(activeEntries);
+  const renderedWorkingThreads = threadsOf(workingEntries);
+  const liveGroupKeys = new Set(
+    [...activeEntries, ...workingEntries].flatMap((entry) =>
+      entry.kind === "group" ? [entry.group.key] : [],
+    ),
+  );
   const projectFolders =
     folderGroups === null
       ? null
@@ -575,12 +687,15 @@ function useSidebarThreads(input: {
             canShowLess: showAll && hidden.length > 0,
           };
         });
+  // Rows a fold hides are off screen, so they stay out of the ordered list the
+  // same way a collapsed shelf's rows do: range selection, action sweeps, jump
+  // hints and thread traversal must not reach a row the user cannot see.
   const orderedThreads = [
     ...pinnedThreads,
     ...(projectFolders === null
-      ? activeThreads
+      ? renderedActiveThreads
       : projectFolders.flatMap((folder) => folder.threads)),
-    ...visibleWorkingThreads,
+    ...renderedWorkingThreads,
     ...visibleSnoozedThreads,
     ...renderedSettledThreads,
   ];
@@ -634,8 +749,41 @@ function useSidebarThreads(input: {
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
+    activeEntries,
+    workingEntries,
+    manualGroups,
+    setManualGroups,
+    setUngroupedThreads,
+    groupKeyOf,
+    // Every live thread a group holds, which a folded group's rows cannot
+    // answer: a group read from titles keeps no membership of its own, and the
+    // rows that would stand for it are the ones folding hides.
+    membersOfGroup: (groupKey: string) =>
+      threads
+        .filter((thread) => groupKeyOf(thread) === groupKey)
+        .map((thread) => ({ key: threadShellKey(thread), title: thread.title })),
+    liveGroupKeys,
+    renderedActiveThreads,
+    renderedWorkingThreads,
+    // Drop planning reads the slot a row was dropped into, which only exists
+    // among the rendered rows; the unfolded activeKeys below still answer
+    // "is this thread canonically active?" for the optimistic-drop release.
+    renderedActiveKeys: renderedActiveThreads.map(threadShellKey),
+    toggleGroup: (groupKey: string) =>
+      setCollapsedGroups((current) => toggleCollapsedGroup(current, groupKey, liveGroupKeys)),
     orderedThreadKeys: orderedThreads.map(threadShellKey),
     threadByKey: new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread] as const)),
+    // Ordering reaches rows the screen does not: a folded group's members hold
+    // their place in the inbox, so a drop has to be able to write their keys.
+    threadByAnyKey: new Map(
+      [
+        ...pinnedThreads,
+        ...activeThreads,
+        ...workingThreads,
+        ...snoozedThreads,
+        ...settledThreads,
+      ].map((thread) => [threadShellKey(thread), thread] as const),
+    ),
     settledThreadKeys: new Set(settledThreads.map(threadShellKey)),
     snoozedThreadKeys: new Set(snoozedThreads.map(threadShellKey)),
     sectionByThreadKey,
@@ -653,6 +801,18 @@ function useSidebarThreads(input: {
   };
 }
 
+/** A status that is a request to the user rather than progress. */
+function threadWantsAnAnswer(thread: EnvironmentThreadShell): boolean {
+  const status = resolveSidebarRowStatus(thread);
+  return (
+    status === "approval" ||
+    status === "input" ||
+    status === "request" ||
+    status === "failed" ||
+    status === "limited"
+  );
+}
+
 function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const {
     threads,
@@ -663,6 +823,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     workingShelfEnabled,
     sortActiveBySend,
   } = input;
+  const groupKeyOf = input.groupKeyOf;
   const preciseNow = new Date().toISOString();
   const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys, delegatedUnderParent);
   const inboxObservation = inboxReturns.observe(workingShelfEnabled ? threads : null);
@@ -681,6 +842,9 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     serverConfigs,
     connectedEnvironmentIds: input.connectedEnvironmentIds,
   });
+  // The thread an optimistic drop just placed; ticket cohesion leaves it where
+  // the drop put it rather than relocating it out from under the user.
+  let droppedThread: EnvironmentThreadShell | null = null;
   for (const thread of visible) {
     const configLoaded = serverConfigs.has(thread.environmentId);
     const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
@@ -691,16 +855,16 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
         optimisticDrop.occurredAt,
         optimisticDrop.assignedKeys.get(threadKey),
       );
+      const dropped = optimisticDrop.clearsSnooze
+        ? projected
+        : { ...projected, snoozedAt: thread.snoozedAt, snoozedUntil: thread.snoozedUntil };
+      droppedThread = dropped;
       (optimisticDrop.section === "pinned"
         ? pinned
         : optimisticDrop.section === "settled"
           ? settled
-          : inbox(projected, true)
-      ).push(
-        optimisticDrop.clearsSnooze
-          ? projected
-          : { ...projected, snoozedAt: thread.snoozedAt, snoozedUntil: thread.snoozedUntil },
-      );
+          : inbox(dropped, true)
+      ).push(dropped);
     } else {
       const section = resolveSidebarThreadSection({
         snoozed: configLoaded && effectiveSnoozed(thread, { now: preciseNow }),
@@ -719,11 +883,22 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   }
   // Availability gates dragging only; sorting must stay consistent across clients.
   const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-  const sortedActive = sortActiveBySend
-    ? sortWorkingThreadsBySend(active)
-    : workingShelfEnabled
-      ? sortInboxThreadsByReturn(active, inboxObservation.returnedAt)
-      : sortThreadsForSidebar(active);
+  // A ticket's threads share a live section and sit together.
+  const live = cohereGroupSections({
+    active,
+    working,
+    groupKeyOf,
+    needsAttention: threadWantsAnAnswer,
+    skip: droppedThread,
+  });
+  const sortedActive = clusterThreadsByGroup(
+    sortActiveBySend
+      ? sortWorkingThreadsBySend(live.active)
+      : workingShelfEnabled
+        ? sortInboxThreadsByReturn(live.active, inboxObservation.returnedAt)
+        : sortThreadsForSidebar(live.active),
+    groupKeyOf,
+  );
   return {
     pinnedThreads:
       optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -743,7 +918,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
             preferredIds: optimisticDrop.order,
             getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           }),
-    workingThreads: sortWorkingThreadsBySend(working),
+    workingThreads: clusterThreadsByGroup(sortWorkingThreadsBySend(live.working), groupKeyOf),
     snoozedThreads: snoozed.toSorted(
       (left, right) =>
         firstValidTimestampMs(left.snoozedUntil ?? null) -
@@ -839,6 +1014,19 @@ function isOptimisticDropReleased(input: {
   });
   const allAssignmentsLanded = [...optimisticDrop.assignedKeys].every(
     ([threadKey, orderKey]) => keyByThread.get(threadKey) === orderKey,
+  );
+  dndTrace(
+    "hold-why",
+    membershipChanged,
+    foreignKeyLanded,
+    allAssignmentsLanded,
+    [...optimisticDrop.assignedKeys]
+      .filter(([threadKey, orderKey]) => keyByThread.get(threadKey) !== orderKey)
+      .map(([threadKey, orderKey]) => [
+        threadKey.slice(-8),
+        String(keyByThread.get(threadKey)),
+        orderKey,
+      ]),
   );
   return membershipChanged || foreignKeyLanded || allAssignmentsLanded;
 }
@@ -1081,6 +1269,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : null;
   const [renamingTitle, setRenamingTitle] = useState("");
   const renamingOriginalTitleRef = useRef("");
+  // A group is named the moment it is made: its row opens straight into its
+  // own rename, the way a new thread's title is edited in place.
+  const [renamingGroupKey, setRenamingGroupKey] = useState<string | null>(null);
   const settlingThreadKeysRef = useRef(new Set<string>());
   const threadListRef = useRef<HTMLUListElement | null>(null);
   const searchResultsListRef = useRef<HTMLUListElement | null>(null);
@@ -1094,9 +1285,20 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     readonly occurredAt: string;
     readonly activationY: number | null;
     readonly targetSection: SidebarSection | null;
+    // The row this drag would join, when it hovers the middle of one rather
+    // than the space between two.
+    readonly joinTargetId: string | null;
+    // The row the drop lands against, and on which side of it, so the list can
+    // show where the release would put the row instead of leaving it to be
+    // guessed from the gap that opens.
+    readonly insertAnchor: { readonly id: string; readonly side: "above" | "below" } | null;
     readonly contextDrag: boolean;
   } | null>(null);
   const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
+  // The sensor's own pointer position. dnd-kit's delta folds in scrolling, and
+  // the dragged card is clamped by a modifier, so neither answers "where is the
+  // hand" — which is the only thing a drop decision should be read from.
+  const pointerYRef = useRef<number | null>(null);
   const contextDragKeyRef = useRef<string | null>(null);
   const dragScrollRef = useRef<{ readonly viewport: Element; readonly top: number } | null>(null);
   const [actionSweep, setActionSweep] = useState<{
@@ -1381,9 +1583,19 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleProjectFolderShowAll,
     renderedSettledThreads,
     visibleSnoozedThreads,
-    visibleWorkingThreads,
+    activeEntries,
+    workingEntries,
+    manualGroups,
+    setManualGroups,
+    setUngroupedThreads,
+    groupKeyOf,
+    membersOfGroup,
+    liveGroupKeys,
+    renderedActiveKeys,
+    toggleGroup,
     orderedThreadKeys,
     threadByKey,
+    threadByAnyKey,
     settledThreadKeys,
     snoozedThreadKeys,
     sectionByThreadKey,
@@ -1487,6 +1699,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const orderedThreadKeysRef = useRef(orderedThreadKeys);
   // Read changing maps/sets through refs so streamed events preserve row callbacks.
   const threadByKeyRef = useRef(threadByKey);
+  const manualGroupsRef = useRef(manualGroups);
   const settledThreadKeysRef = useRef(settledThreadKeys);
   const snoozedThreadKeysRef = useRef(snoozedThreadKeys);
 
@@ -1809,6 +2022,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     dragState?.activeSection === "working";
   const dragTargetSection = isContextDrag ? null : (dragState?.targetSection ?? null);
   const finishThreadDrag = (started: boolean) => {
+    dndTrace("sensor-finish", started);
     dragSensorRef.current = null;
     contextDragKeyRef.current = null;
     dragScrollRef.current = null;
@@ -1845,6 +2059,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (scroll && scroll.viewport.scrollTop !== scroll.top) scroll.viewport.scrollTop = scroll.top;
   };
   const moveThreadContextDrag = (point: { x: number; y: number }) => {
+    pointerYRef.current = point.y;
     // Search results cannot reorder, so their context preview starts inside the list.
     const contextDrag = searchResultsListRef.current !== null || pointerOutsideThreadList(point);
     setDragState((current) =>
@@ -1884,6 +2099,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectGroupsRef.current = projectGroups;
     orderedThreadKeysRef.current = orderedThreadKeys;
     threadByKeyRef.current = threadByKey;
+    manualGroupsRef.current = manualGroups;
     settledThreadKeysRef.current = settledThreadKeys;
     snoozedThreadKeysRef.current = snoozedThreadKeys;
     sectionByThreadKeyRef.current = sectionByThreadKey;
@@ -1942,17 +2158,23 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   );
   // Release during render when server state catches up so canonical order appears in the same frame.
-  if (
-    optimisticDrop !== null &&
-    isOptimisticDropReleased({
+  if (optimisticDrop !== null) {
+    const released = isOptimisticDropReleased({
       optimisticDrop,
       threads,
       pinnedKeys,
       activeKeys,
       now: snoozeNow,
-    })
-  ) {
-    setOptimisticDrop(null);
+    });
+    dndTrace(
+      "hold",
+      released,
+      optimisticDrop.key.slice(-8),
+      optimisticDrop.order?.length ?? null,
+      activeKeys.length,
+      [...optimisticDrop.assignedKeys.keys()].map((key) => key.slice(-8)),
+    );
+    if (released) setOptimisticDrop(null);
   }
   const attemptPin = (threadRef: ScopedThreadRef) => {
     void (async () => {
@@ -1986,10 +2208,22 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     })();
   };
 
+  const groupMemberKeysOf = (groupKey: string) =>
+    membersOfGroup(groupKey).map((member) => member.key);
+  // The line showing where a release lands, read from the arrangement the drop
+  // would apply rather than from the pointer.
+  const insertLineFor = (id: string) =>
+    dragState?.insertAnchor?.id === id ? dragState.insertAnchor.side : undefined;
   const handleThreadDragStart = (event: DragStartEvent) => {
     const activeKey = String(event.active.id);
+    dndTrace("start", activeKey);
     contextDragKeyRef.current = activeKey;
-    const activeSection = sectionByThreadKey.get(activeKey);
+    const draggedGroupKey = sidebarGroupKeyFromItemId(activeKey);
+    // A group sits wherever its members sit, so its first one answers for it.
+    const activeSection =
+      draggedGroupKey === null
+        ? sectionByThreadKey.get(activeKey)
+        : sectionByThreadKey.get(groupMemberKeysOf(draggedGroupKey)[0] ?? "");
     if (activeSection === undefined) return;
     listMotionRef.current?.suspend();
     const list = threadListRef.current;
@@ -2008,6 +2242,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       activeKey,
       activeSection,
       targetSection: activeSection,
+      joinTargetId: null,
+      insertAnchor: null,
       contextDrag: false,
       occurredAt: new Date().toISOString(),
       activationY:
@@ -2015,6 +2251,49 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     });
   };
   const hasProjectFolders = projectFolders !== null && projectFolders.length > 0;
+  // One pass over the laid-out entries gives both what a row needs for its
+  // rail and what a folded group's row shows in place of its members.
+  const groupEntryByThreadKey = new Map<
+    string,
+    { readonly group: ThreadGroup; readonly isGroupEnd: boolean }
+  >();
+  const groupByKey = new Map<string, ThreadGroup>();
+  const groupMembersByKey = new Map<string, SidebarGroupMember[]>();
+  for (const entry of [...activeEntries, ...workingEntries]) {
+    if (entry.kind === "group") {
+      groupByKey.set(entry.group.key, entry.group);
+      continue;
+    }
+    if (entry.group === null) continue;
+    const key = threadShellKey(entry.thread);
+    groupEntryByThreadKey.set(key, { group: entry.group, isGroupEnd: entry.isGroupEnd });
+  }
+  for (const thread of [...activeThreads, ...workingThreads]) {
+    const groupKey = groupKeyOf(thread);
+    if (groupKey === null || !groupByKey.has(groupKey)) continue;
+    const status = resolveSidebarRowStatus(thread);
+    const members = groupMembersByKey.get(groupKey) ?? [];
+    members.push({
+      key: threadShellKey(thread),
+      project: projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
+      tone: threadWantsAnAnswer(thread)
+        ? "attention"
+        : status === "working" || status === "waiting"
+          ? "working"
+          : "done",
+      title: thread.title,
+      thread,
+      providerEntryByInstanceId:
+        providerEntriesByEnvironment.get(thread.environmentId) ?? EMPTY_PROVIDER_ENTRIES,
+      canSettle:
+        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement ===
+          true && thread.settledOverride !== "settled",
+      canSnooze:
+        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true &&
+        canSnooze(thread, { now: snoozeNow }),
+    });
+    groupMembersByKey.set(groupKey, members);
+  }
   const sidebarListItemsFresh = ((): readonly SidebarListItem[] => {
     const rowsOf = (
       list: readonly EnvironmentThreadShell[],
@@ -2024,6 +2303,28 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
         return { kind: "thread", key, section };
       });
+    // A group's row sits in the list beside its members, so the fold, the
+    // motion pass and the sortable context all see one flat list as before.
+    const itemsOf = (
+      entries: readonly ThreadGroupEntry<EnvironmentThreadShell>[],
+      section: SidebarSection,
+    ): SidebarListItem[] =>
+      entries.map((entry) =>
+        entry.kind === "group"
+          ? {
+              kind: "group",
+              groupKey: entry.group.key,
+              section,
+              memberKeys: (groupMembersByKey.get(entry.group.key) ?? []).map(
+                (member) => member.key,
+              ),
+            }
+          : {
+              kind: "thread",
+              key: scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)),
+              section,
+            },
+      );
     // Boring mode keeps a pinned open project or one the user filtered to, so it can start a thread.
     if (
       !hasProjectFolders &&
@@ -2040,12 +2341,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const pinnedRows = rowsOf(pinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = rowsOf(activeThreads, "active");
+    const activeRows = itemsOf(activeEntries, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
     items.push(...activeRows);
     if (workingThreads.length > 0) {
       items.push({ kind: "marker", marker: "working-header" });
-      items.push(...rowsOf(visibleWorkingThreads, "working"));
+      items.push(...itemsOf(workingEntries, "working"));
     }
     if (snoozedThreads.length > 0) {
       items.push({ kind: "marker", marker: "snoozed-header" });
@@ -2059,7 +2360,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   })();
   // Preserve the list while streamed updates leave order unchanged to retain row memoization.
   const sidebarListItemsKey = sidebarListItemsFresh
-    .map((item) => (item.kind === "thread" ? item.section + ":" + item.key : item.marker))
+    .map((item) =>
+      item.kind === "thread"
+        ? item.section + ":" + item.key
+        : item.kind === "group"
+          ? "group:" + item.section + ":" + item.groupKey
+          : item.marker,
+    )
     .join("\n");
   const [sidebarListItemsState, setSidebarListItems] = useState(sidebarListItemsFresh);
   const [sidebarListItemsKeyState, setSidebarListItemsKeyState] = useState(sidebarListItemsKey);
@@ -2070,11 +2377,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     // Update the local list too; threadByKey already omits rows moved into collapsed shelves.
     sidebarListItems = sidebarListItemsFresh;
   }
+  // By its own id, not by thread key: a group's row is dragged too, and
+  // looking only for a thread made every group drag cancel itself one move in.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels the dnd-kit drag sensor when the dragged row leaves the list
   useEffect(() => {
     if (
       dragState !== null &&
-      !sidebarListItems.some((item) => item.kind === "thread" && item.key === dragState.activeKey)
+      !sidebarListItems.some((item) => sidebarListItemId(item) === dragState.activeKey)
     ) {
       cancelThreadDrag();
     }
@@ -2107,14 +2416,90 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     previousShelfExpansionKeyRef.current = shelfExpansionKey;
     listMotionRef.current?.update(listMotionPass.animate && shelvesUnchanged);
   }, [listMotionPass, shelfExpansionKey]);
-  const handleThreadDragOver = (event: DragOverEvent) => {
-    const target = event.over
-      ? resolveSidebarDropTarget(sidebarListItems, String(event.active.id), String(event.over.id))
-      : null;
+  // Both the hover and the move feed this: dnd-kit only reports a hover when
+  // the row under the pointer changes, so a side read there alone never
+  // flipped while the pointer crossed the row it was already over.
+  const handleThreadDragOver = (event: DragOverEvent | DragMoveEvent) => {
+    const draggedGroupKey = sidebarGroupKeyFromItemId(String(event.active.id));
+    const activeRect = event.active.rect.current.translated;
+    // The pointer, not the card: a modifier holds the card below the Pinned
+    // label, so near the top of the list the card trails the hand by a couple
+    // of dozen pixels and every decision taken on it is taken too low.
+    const pointerY = pointerYRef.current;
+    const reach = pointerY ?? (activeRect === null ? null : activeRect.top + activeRect.height / 2);
+    const hoveredSide: "above" | "below" | undefined =
+      reach === null || event.over === null
+        ? undefined
+        : reach < event.over.rect.top + event.over.rect.height / 2
+          ? "above"
+          : "below";
+    const target = !event.over
+      ? null
+      : draggedGroupKey === null
+        ? resolveSidebarDropTarget(
+            sidebarListItems,
+            String(event.active.id),
+            String(event.over.id),
+            hoveredSide,
+          )
+        : resolveSidebarGroupDropTarget(
+            sidebarListItems,
+            draggedGroupKey,
+            String(event.over.id),
+            hoveredSide,
+          );
+    const overId = event.over === null ? null : String(event.over.id);
+    const overItem =
+      overId === null
+        ? undefined
+        : sidebarListItems.find((item) => sidebarListItemId(item) === overId);
+    const joinable =
+      sidebarGroupKeyFromItemId(String(event.active.id)) === null &&
+      (overItem?.kind === "group" ||
+        (overItem?.kind === "thread" && !groupEntryByThreadKey.has(overItem.key)));
+    const joinTargetId =
+      !isContextDrag &&
+      event.over !== null &&
+      activeRect !== null &&
+      joinable &&
+      overId !== event.active.id &&
+      reach !== null &&
+      isGroupJoinHover({
+        activeTop: reach,
+        activeHeight: 0,
+        overTop: event.over.rect.top,
+        overHeight: event.over.rect.height,
+      })
+        ? overId
+        : null;
+    // The edge of the hovered row the drop belongs to, read from the dragged
+    // card itself: the row it is nearest the top of is the row it goes above.
+    const insertAnchor =
+      overId === null ||
+      joinTargetId !== null ||
+      hoveredSide === undefined ||
+      overId === event.active.id
+        ? null
+        : { id: overId, side: hoveredSide };
+    dndTrace(
+      "over",
+      overId,
+      hoveredSide,
+      target?.section ?? null,
+      joinTargetId,
+      reach === null ? null : Math.round(reach),
+      event.over === null ? null : Math.round(event.over.rect.top + event.over.rect.height / 2),
+      event.over === null ? null : Math.round(event.over.rect.height),
+    );
     setDragState((current) =>
       current === null || current.activeKey !== String(event.active.id)
         ? current
-        : { ...current, targetSection: target?.section ?? null },
+        : {
+            ...current,
+            targetSection: target?.section ?? null,
+            joinTargetId,
+            insertAnchor,
+          },
     );
   };
   const sortableIds = sidebarListItems.map(sidebarListItemId);
@@ -2131,7 +2516,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         });
   const sidebarSortingStrategy = createSidebarSortingStrategy({
     items: sidebarListItems,
-    enabled: !isContextDrag,
+    insertSide: dragState?.insertAnchor?.side,
+    // Joining a group does not take a slot, so the rows stay where they are
+    // instead of opening a gap the drop would not use.
+    enabled: !isContextDrag && dragState?.joinTargetId == null,
     boundaryLabelHeight: SIDEBAR_DRAG_LABEL_HEIGHT,
     settledOrder: draggedSettledOrder,
     ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
@@ -2143,13 +2531,35 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const draggedThreadKey = dragState?.activeKey;
   const draggedFromSection = dragState?.activeSection;
   const dragActivationY = dragState?.activationY;
+  const isJoinableTargetId = (id: string) => {
+    const item = sidebarListItems.find((candidate) => sidebarListItemId(candidate) === id);
+    // A group is joined through its own row; its members are only places to insert.
+    if (item?.kind === "thread") return !groupEntryByThreadKey.has(item.key);
+    return item?.kind === "group";
+  };
   const dndCollisionDetection = (() => {
     if (draggedThreadKey === undefined || draggedFromSection === undefined)
       return createSidebarCollisionDetection(() => true);
+    const draggedGroupKey = sidebarGroupKeyFromItemId(draggedThreadKey);
+    if (draggedGroupKey !== null) {
+      return createSidebarCollisionDetection(
+        (id) => {
+          const ok = resolveSidebarGroupDropTarget(sidebarListItems, draggedGroupKey, id) !== null;
+          dndTrace("valid?", id, ok);
+          return ok;
+        },
+        { items: sidebarListItems, activationY: dragActivationY ?? null },
+      );
+    }
     const source = threadByKey.get(draggedThreadKey);
     if (source === undefined) return createSidebarCollisionDetection(() => false);
     return createSidebarCollisionDetection(
       (id) => {
+        // A row whose insertion would move nothing is still a target worth
+        // keeping: dropping onto its middle groups into it, and the neighbour
+        // of the dragged row — where inserting is a no-op — is the first row
+        // anyone tries to group with.
+        if (id !== draggedThreadKey && isJoinableTargetId(id)) return true;
         const target = resolveSidebarDropTarget(sidebarListItems, draggedThreadKey, id);
         if (target === null) return false;
         return (
@@ -2163,7 +2573,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             pinnedOrder: pinnedKeys,
             pinnedKeysById,
             reorderableKeys: draggableThreadKeys,
-            activeOrder: activeKeys,
+            activeOrder: renderedActiveKeys,
             activeKeysById,
             activeReorderableKeys: activeReorderableThreadKeys,
             activeTimeOrdered: workingShelfEnabled,
@@ -2176,14 +2586,142 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       },
     );
   })();
+  /**
+   * A drop onto a row, rather than between two. It only rearranges this
+   * device's grouping, so nothing goes to the server and the optimistic-drop
+   * machinery the ordinary drops use stays out of it.
+   */
+  const applyGroupDrop = (draggedKey: string, joinTargetId: string) => {
+    const targetGroupKey = sidebarGroupKeyFromItemId(joinTargetId);
+    const targetThreadKey = targetGroupKey === null ? joinTargetId : null;
+    const targetTitle =
+      targetThreadKey === null ? null : (threadByKey.get(targetThreadKey)?.title ?? null);
+    const draggedTitle = threadByKey.get(draggedKey)?.title ?? null;
+    const plan = planGroupDrop({
+      manualGroups,
+      draggedKey,
+      targetGroupKey,
+      targetGroupMembers: (groupMembersByKey.get(targetGroupKey ?? "") ?? []).map(
+        (member) => member.key,
+      ),
+      targetThreadKey,
+      newGroupId: randomUUID(),
+      newGroupName: suggestGroupName(
+        [targetTitle, draggedTitle].flatMap((title) => (title === null ? [] : [title])),
+      ),
+    });
+    if (plan === null) return;
+    setManualGroups(plan.manualGroups);
+    // Dropping a thread into a group is the opposite statement to having taken
+    // it out of one, so it clears the removal rather than fighting it.
+    setUngroupedThreads((current) => ungroupedKeysWithout(current, [draggedKey]));
+    setRenamingGroupKey(plan.renameKey);
+  };
+
+  /**
+   * Put a group where its row was dropped.
+   *
+   * Its members carry the order, so the move is theirs: they take consecutive
+   * keys at the slot the block landed on, and the ordinary assignment path
+   * writes them. One drop, one arrangement, exactly as dragging a thread.
+   */
+  const moveGroup = (groupKey: string, overId: string | null, side?: "above" | "below") => {
+    if (overId === null) return;
+    const memberKeys = groupMemberKeysOf(groupKey);
+    const target = resolveSidebarGroupDropTarget(sidebarListItems, groupKey, overId, side);
+    dndTrace("moveGroup", groupKey, overId, target === null ? "no-target" : target.activeOrder);
+    if (target === null) return;
+    // The same gate `planSidebarThreadDrop` applies to a thread: only rows the
+    // user may place take part, and a plan reaching any other row is no plan.
+    const writable = activeReorderableThreadKeys;
+    if (!memberKeys.every((key) => writable.has(key))) return;
+    const orderedIds = target.activeOrder.filter(
+      (key) => writable.has(key) || activeKeysById.get(key) != null,
+    );
+    const keysById = new Map(activeKeysById);
+    const assignments: Array<{ readonly id: string; readonly orderKey: string }> = [];
+    for (const memberKey of memberKeys) {
+      for (const assignment of planPinnedReorder({ orderedIds, keysById, movedId: memberKey })) {
+        keysById.set(assignment.id, assignment.orderKey);
+        assignments.push(assignment);
+      }
+    }
+    dndTrace("assignments", assignments);
+    if (assignments.length === 0 || !assignments.every(({ id }) => writable.has(id))) return;
+    const assignedKeys = new Map(assignments.map(({ id, orderKey }) => [id, orderKey]));
+    if (
+      !checkThreadOperations(
+        [...assignedKeys.keys()].flatMap((key) => {
+          const thread = threadByAnyKey.get(key);
+          return thread ? [thread] : [];
+        }),
+      )
+    )
+      return;
+    const drop = {
+      key: memberKeys[0]!,
+      sourceSection: "active" as const,
+      section: "active" as const,
+      // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
+      occurredAt: new Date().toISOString(),
+      clearsSnooze: false,
+      order: target.activeOrder,
+      keysAtDrop: activeKeysById,
+      assignedKeys,
+    };
+    setOptimisticDrop(drop);
+    void (async () => {
+      for (const [threadKey, orderKey] of assignedKeys) {
+        const thread = threadByAnyKey.get(threadKey);
+        if (thread === undefined) continue;
+        const result = await reorderActiveThread(
+          scopeThreadRef(thread.environmentId, thread.id),
+          orderKey,
+        );
+        if (result._tag === "Success") continue;
+        setOptimisticDrop((current) => (current === drop ? null : current));
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to reorder active threads",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return;
+      }
+    })();
+  };
   const handleThreadDragEnd = (event: DragEndEvent) => {
     if (projectFolders !== null) return;
     const activeKey = String(event.active.id);
+    dndTrace("end", activeKey, event.over === null ? null : String(event.over.id));
+    const joinTargetId = dragState?.joinTargetId ?? null;
+    if (joinTargetId !== null) {
+      applyGroupDrop(activeKey, joinTargetId);
+      return;
+    }
+    const draggedGroupKey = sidebarGroupKeyFromItemId(activeKey);
+    if (draggedGroupKey !== null) {
+      moveGroup(
+        draggedGroupKey,
+        event.over === null ? null : String(event.over.id),
+        dragState?.insertAnchor?.side,
+      );
+      return;
+    }
     const activeSection = sectionByThreadKey.get(activeKey);
     const target =
       event.over === null
         ? null
-        : resolveSidebarDropTarget(sidebarListItems, activeKey, String(event.over.id));
+        : resolveSidebarDropTarget(
+            sidebarListItems,
+            activeKey,
+            String(event.over.id),
+            dragState?.insertAnchor?.side,
+          );
     const activeThread = threadByKey.get(activeKey);
     if (activeSection === undefined || target === null || activeThread === undefined) return;
     const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
@@ -2197,11 +2735,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       pinnedOrder: pinnedKeys,
       pinnedKeysById,
       reorderableKeys: draggableThreadKeys,
-      activeOrder: activeKeys,
+      activeOrder: renderedActiveKeys,
       activeKeysById,
       activeReorderableKeys: activeReorderableThreadKeys,
       activeTimeOrdered: workingShelfEnabled,
     });
+    dndTrace("plan", plan.kind, "assignments" in plan ? plan.assignments.length : null);
     if (plan.kind === "none") return;
     if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
     const assignments =
@@ -2216,7 +2755,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (
       !checkThreadOperations(
         [activeKey, ...assignments.map(({ id }) => id)].flatMap((key) => {
-          const thread = threadByKey.get(key);
+          const thread = threadByAnyKey.get(key);
           return thread ? [thread] : [];
         }),
       )
@@ -2226,6 +2765,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       key: activeKey,
       sourceSection: activeSection,
       section: target.section,
+      // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
       occurredAt: new Date().toISOString(),
       clearsSnooze:
         plan.kind === "pin" ||
@@ -2307,7 +2847,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       }
       const keyWrites = plan.kind === "pin" ? plan.extraAssignments : plan.assignments;
       for (const assignment of keyWrites) {
-        const thread = threadByKey.get(assignment.id);
+        const thread = threadByAnyKey.get(assignment.id);
         if (thread === undefined) continue;
         if (
           !(await run(
@@ -2378,6 +2918,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           return;
         }
       })();
+    },
+  );
+  const snoozeThreads = useStableCallback(
+    (threadKeys: readonly string[], preset: Pick<SnoozePreset, "snoozedUntil">) => {
+      const coSnoozingKeys = new Set(threadKeys);
+      for (const threadKey of threadKeys) {
+        const thread = threadByKeyRef.current.get(threadKey);
+        if (!thread) continue;
+        attemptSnooze(scopeThreadRef(thread.environmentId, thread.id), preset, { coSnoozingKeys });
+      }
     },
   );
 
@@ -2476,6 +3026,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   },
                 ]
               : []),
+            ...(count > 1 && projectFolders === null
+              ? [{ id: "group", label: `Group (${count})`, separatorBefore: true }]
+              : []),
             ...(markUnreadThreads.length > 0
               ? [
                   {
@@ -2496,6 +3049,22 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         ),
       );
       if (clicked._tag === "Failure" || clicked.value === null) return;
+      // Grouping is a local arrangement, so it skips the operate-scope gate
+      // the server-side actions below go through.
+      if (clicked.value === "group") {
+        const id = randomUUID();
+        setManualGroups((current) =>
+          addManualGroup(current, {
+            id,
+            name: suggestGroupName(selectedThreads.map((thread) => thread.title)),
+            members: threadKeys,
+          }),
+        );
+        setUngroupedThreads((current) => ungroupedKeysWithout(current, threadKeys));
+        clearSelection();
+        setRenamingGroupKey(manualGroupKey(id));
+        return;
+      }
       const actionTargets =
         clicked.value === "unpin"
           ? pinnedSelectedThreads
@@ -2704,6 +3273,58 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   );
 
+  const handleCommitGroupRename = useStableCallback((groupKey: string, name: string) => {
+    setManualGroups((current) => renameManualGroup(current, groupKey, name));
+    setRenamingGroupKey(null);
+  });
+  const handleCancelGroupRename = useStableCallback(() => setRenamingGroupKey(null));
+
+  const handleGroupContextMenu = useStableCallback(
+    (groupKey: string, position: { x: number; y: number }) => {
+      void (async () => {
+        const api = readLocalApi();
+        if (!api) return;
+        const members = membersOfGroup(groupKey);
+        const clicked = await settlePromise(() =>
+          api.contextMenu.show(
+            [
+              { id: "rename", label: "Rename group" },
+              { id: "ungroup", label: "Ungroup", destructive: true },
+            ],
+            position,
+          ),
+        );
+        if (clicked._tag === "Failure" || clicked.value === null) return;
+        if (clicked.value === "rename") {
+          // A group read off the titles has no name of its own to change, so
+          // renaming it is where it becomes one of yours — the same conversion
+          // a drop onto it performs, under the name it already had.
+          if (manualGroupNameOf(manualGroupsRef.current, groupKey) === null) {
+            const id = randomUUID();
+            setManualGroups((current) =>
+              addManualGroup(current, {
+                id,
+                name: groupKey,
+                members: members.map((member) => member.key),
+              }),
+            );
+            setRenamingGroupKey(manualGroupKey(id));
+            return;
+          }
+          setRenamingGroupKey(groupKey);
+        }
+        if (clicked.value === "ungroup") {
+          // Both halves, whichever kind of group this is: the membership goes,
+          // and the titles that would re-form the group are refused. Without
+          // the second, taking apart a group built around a ticket lasted
+          // exactly as long as the next render.
+          setManualGroups((current) => dropManualGroup(current, groupKey));
+          setUngroupedThreads((current) => ungroupedKeysWith(current, members));
+        }
+      })();
+    },
+  );
+
   const handleThreadContextMenu = useStableCallback(
     (
       threadRef: ScopedThreadRef,
@@ -2773,6 +3394,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     }
                   : null,
               isPinned,
+              // A group that is on screen, which a lone thread whose title
+              // names a ticket is not: nothing would be left to leave.
+              inGroup: liveGroupKeys.has(groupKeyOf(thread) ?? ""),
               isSettled,
               autoSettleEnabled: thread.autoSettleDisabledAt == null,
               isSnoozed,
@@ -2856,6 +3480,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             }
             return;
           }
+          case "remove-from-group":
+            setManualGroups((current) => removeFromManualGroups(current, [threadKey]));
+            setUngroupedThreads((current) =>
+              ungroupedKeysWith(current, [{ key: threadKey, title: thread.title }]),
+            );
+            return;
           case "settle":
             attemptSettle(threadRef);
             return;
@@ -3537,6 +4167,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               modifiers={dndModifiers}
               onDragStart={handleThreadDragStart}
               onDragOver={handleThreadDragOver}
+              onDragMove={handleThreadDragOver}
               onDragEnd={handleThreadDragEnd}
             >
               <SortableContext items={sortableIds} strategy={sidebarSortingStrategy}>
@@ -3574,6 +4205,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         : isCard
                           ? "card"
                           : "slim";
+                      // Both are primitives, so a row that is not in a
+                      // group keeps a stable undefined and its memo survives
+                      // streamed events.
+                      const groupEntry = groupEntryByThreadKey.get(threadKey);
                       return (
                         <SortableThreadRow
                           key={threadKey}
@@ -3584,7 +4219,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             !draggableThreadKeys.has(threadKey) ||
                             optimisticDrop !== null
                           }
+                          insertLine={insertLineFor(threadKey)}
                           thread={thread}
+                          inGroup={groupEntry !== undefined}
+                          isGroupEnd={groupEntry?.isGroupEnd}
                           variant={rowVariant}
                           navigationParent={
                             folderRow ??
@@ -3611,6 +4249,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           dragOverPinned={
                             dragState?.activeKey === threadKey && dragTargetSection === "pinned"
                           }
+                          isJoinTarget={dragState?.joinTargetId === threadKey}
                           sweepAction={actionSweep?.keys.has(threadKey) ? actionSweep.action : null}
                           snoozeWakeLabelText={
                             section === "snoozed" && thread.snoozedUntil != null
@@ -3685,6 +4324,43 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         // Folders draw active rows in their own place below.
                         if (projectFolders !== null && item.section === "active") continue;
                         items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
+                        continue;
+                      }
+                      if (item.kind === "group") {
+                        const group = groupByKey.get(item.groupKey);
+                        if (group !== undefined) {
+                          items.push(
+                            <SidebarGroupHeader
+                              key={`group:${item.groupKey}`}
+                              groupKey={group.key}
+                              name={group.name}
+                              size={group.size}
+                              expanded={!group.collapsed}
+                              members={groupMembersByKey.get(group.key) ?? EMPTY_GROUP_MEMBERS}
+                              onToggle={toggleGroup}
+                              renaming={renamingGroupKey === group.key}
+                              onCommitRename={handleCommitGroupRename}
+                              onCancelRename={handleCancelGroupRename}
+                              onContextMenu={handleGroupContextMenu}
+                              onSettleThreads={settleThreads}
+                              onSnoozeThreads={snoozeThreads}
+                              timestampFormat={timestampFormat}
+                              // With the Working shelf on, the inbox is
+                              // ordered by return time and a hand-placed row
+                              // is ignored, so there is nothing to drag for.
+                              draggable={
+                                !workingShelfEnabled &&
+                                (groupMembersByKey.get(group.key) ?? []).every((member) =>
+                                  activeReorderableThreadKeys.has(member.key),
+                                )
+                              }
+                              isJoinTarget={
+                                dragState?.joinTargetId === sidebarGroupItemId(group.key)
+                              }
+                              insertLine={insertLineFor(sidebarGroupItemId(group.key))}
+                            />,
+                          );
+                        }
                         continue;
                       }
                       if (projectFolders !== null && item.marker === "active-placeholder") {
