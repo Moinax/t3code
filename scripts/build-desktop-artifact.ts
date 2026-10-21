@@ -4079,6 +4079,13 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   if (options.platform === "linux") {
     // fpm uses system xz through tar; threading cuts compression time on many-core runners.
     buildEnv.XZ_DEFAULTS = "-T0";
+    // The fork updater's unit sets T3CODE_REPO; its AppImage only runs on this host.
+    if (process.env.T3CODE_REPO && !buildEnv.T3CODE_GLIBC_BUILD_CEILING) {
+      const report = process.report.getReport() as { header: { glibcVersionRuntime?: string } };
+      if (report.header.glibcVersionRuntime) {
+        buildEnv.T3CODE_GLIBC_BUILD_CEILING = report.header.glibcVersionRuntime;
+      }
+    }
   }
   if (options.platform === "win") {
     // Windows signs only through Azure Trusted Signing. Off Windows,
