@@ -6,6 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HttpClient from "effect/http/HttpClient";
 import * as NetService from "@t3tools/shared/Net";
 import * as Fiber from "effect/Fiber";
@@ -238,6 +239,7 @@ it.effect.each([false, true])(
                 throw new Error("unexpected browser partition lookup");
               },
             }),
+            Layer.mock(ChildProcessSpawner.ChildProcessSpawner, {}),
             FileSystem.layerNoop({}),
             Layer.mock(NetService.NetService, {}),
             Path.layer,
