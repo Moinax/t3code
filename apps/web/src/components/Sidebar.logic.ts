@@ -145,12 +145,34 @@ export function sidebarMarkerId(marker: SidebarListMarker): string {
   return `${SIDEBAR_MARKER_PREFIX}${marker}`;
 }
 
+const SIDEBAR_GROUP_PREFIX = "sidebar-group-";
+
+export function sidebarGroupItemId(groupKey: string): string {
+  return `${SIDEBAR_GROUP_PREFIX}${groupKey}`;
+}
+
+export function sidebarGroupKeyFromItemId(itemId: string): string | null {
+  return itemId.startsWith(SIDEBAR_GROUP_PREFIX) ? itemId.slice(SIDEBAR_GROUP_PREFIX.length) : null;
+}
+
 export type SidebarListItem =
   | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
+  // A group's own row. It names the group and folds it; it is not one of the
+  // threads, so it holds no slot of its own — its members carry the order, and
+  // it carries their keys so a move of the group is a move of that block. They
+  // are all of them, including the ones a fold has taken off the list.
+  | {
+      readonly kind: "group";
+      readonly groupKey: string;
+      readonly section: SidebarSection;
+      readonly memberKeys: readonly string[];
+    }
   | { readonly kind: "marker"; readonly marker: SidebarListMarker };
 
 export function sidebarListItemId(item: SidebarListItem): string {
-  return item.kind === "thread" ? item.key : sidebarMarkerId(item.marker);
+  if (item.kind === "thread") return item.key;
+  if (item.kind === "group") return sidebarGroupItemId(item.groupKey);
+  return sidebarMarkerId(item.marker);
 }
 
 function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number): SidebarSection {
@@ -166,24 +188,100 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
   return section;
 }
 
+/**
+ * Whether a drag is over the middle of the row it hovers, rather than near one
+ * of its edges. The edges keep meaning "insert here", which is what every drop
+ * meant before groups existed; only the middle means "join this one".
+ */
+export function isGroupJoinHover(input: {
+  readonly activeTop: number;
+  readonly activeHeight: number;
+  readonly overTop: number;
+  readonly overHeight: number;
+  /** Share of the row's height that counts as its middle. */
+  readonly band?: number;
+}): boolean {
+  // Half the row. The flicker this was narrowed for came from the side never
+  // being recomputed while the pointer crossed a row, not from the band's
+  // width — and a generous middle is what makes a group an obvious target.
+  const { activeTop, activeHeight, overTop, overHeight, band = 0.5 } = input;
+  if (overHeight <= 0) return false;
+  const activeCenter = activeTop + activeHeight / 2;
+  const overCenter = overTop + overHeight / 2;
+  return Math.abs(activeCenter - overCenter) <= (overHeight * band) / 2;
+}
+
 export type SidebarDropTarget = {
   readonly section: "pinned" | "active" | "settled";
   readonly pinnedOrder: readonly string[];
   readonly activeOrder: readonly string[];
 };
 
+/**
+ * Where a thread lands, and the list that arrangement makes.
+ *
+ * The arrangement is what says which row the drop lands in front of, which is
+ * the only honest way to draw an insertion line: it is read from the same
+ * computation that performs the drop rather than guessed from the pointer.
+ */
+export function planSidebarThreadMove(
+  items: readonly SidebarListItem[],
+  activeKey: string,
+  overId: string,
+  side?: "above" | "below",
+): { readonly items: readonly SidebarListItem[]; readonly target: SidebarDropTarget } | null {
+  const target = resolveSidebarDropTarget(items, activeKey, overId, side);
+  if (target === null) return null;
+  const activeIndex = items.findIndex((item) => sidebarListItemId(item) === activeKey);
+  const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
+  const moved = items.filter((_, index) => index !== activeIndex);
+  const overAt = moved.findIndex((item) => sidebarListItemId(item) === overId);
+  const at =
+    side === undefined || overAt === -1 ? overIndex : side === "above" ? overAt : overAt + 1;
+  moved.splice(at, 0, items[activeIndex]!);
+  return { items: moved, target };
+}
+
+/**
+ * The row an insertion lands in front of, or `null` when it lands last in its
+ * section — the line is drawn under the row before it then.
+ */
+export function resolveSidebarInsertAnchor(
+  moved: readonly SidebarListItem[],
+  activeKey: string,
+): { readonly id: string; readonly side: "above" | "below" } | null {
+  const index = moved.findIndex((item) => sidebarListItemId(item) === activeKey);
+  if (index === -1) return null;
+  const next = moved[index + 1];
+  if (next !== undefined && next.kind !== "marker")
+    return { id: sidebarListItemId(next), side: "above" };
+  const previous = moved.slice(0, index).findLast((item) => item.kind !== "marker");
+  return previous === undefined ? null : { id: sidebarListItemId(previous), side: "below" };
+}
+
 export function resolveSidebarDropTarget(
   items: readonly SidebarListItem[],
   activeKey: string,
   overId: string,
+  /**
+   * Which edge of the hovered row the drop belongs to. Without it the slot is
+   * read from the list alone, which makes a drag coming from above land after
+   * the row it has only just reached — the feedback jumps a whole row ahead of
+   * the pointer.
+   */
+  side?: "above" | "below",
 ): SidebarDropTarget | null {
   const activeIndex = items.findIndex((item) => sidebarListItemId(item) === activeKey);
   const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
   if (activeIndex === -1 || overIndex === -1 || items[activeIndex]?.kind !== "thread") return null;
   const moved = items.filter((_, index) => index !== activeIndex);
-  moved.splice(overIndex, 0, items[activeIndex]!);
-  const section = sectionAtSidebarSlot(moved, overIndex);
+  const overAt = moved.findIndex((item) => sidebarListItemId(item) === overId);
+  const at =
+    side === undefined || overAt === -1 ? overIndex : side === "above" ? overAt : overAt + 1;
+  moved.splice(at, 0, items[activeIndex]!);
+  const section = sectionAtSidebarSlot(moved, at);
   if (section === "working" || section === "snoozed") return null;
+  const onScreen = new Set(items.flatMap((item) => (item.kind === "thread" ? [item.key] : [])));
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
@@ -196,10 +294,95 @@ export function resolveSidebarDropTarget(
         item.marker === "settled-header"
       )
         break;
+    } else if (item.kind === "group") {
+      // A group's row holds no position of its own; its members carry the
+      // order. A fold takes their rows off the list without taking them out of
+      // it, so they are written in here — otherwise a thread dropped beside a
+      // folded group would be ordered against nothing and land nowhere.
+      for (const key of item.memberKeys) {
+        if (onScreen.has(key)) continue;
+        if (currentSection === "pinned") pinnedOrder.push(key);
+        else activeOrder.push(key);
+      }
+      continue;
     } else if (currentSection === "pinned") pinnedOrder.push(item.key);
     else activeOrder.push(item.key);
   }
   return { section, pinnedOrder, activeOrder };
+}
+
+/**
+ * Where a whole group lands when its row is dropped on `overId`, and the list
+ * that arrangement makes.
+ *
+ * The thread version refuses anything but a thread, and skips group rows when
+ * it reads the order out — a group holds no slot of its own. Moving a group is
+ * therefore moving its members, and the order this returns is an ordinary one:
+ * the same assignment path writes the keys, and the same projection animates
+ * the rows.
+ *
+ * A folded group has no member rows to move, so its members are written in at
+ * the slot its own row landed on. An unfolded one travels with its rows, and
+ * they are emitted there rather than where they sit, which is the same thing.
+ *
+ * Only inside the inbox. Pinning or settling a whole group is a decision of its
+ * own, and the group's menu is where it belongs.
+ */
+export function planSidebarGroupMove(
+  items: readonly SidebarListItem[],
+  groupKey: string,
+  overId: string,
+  side?: "above" | "below",
+): { readonly items: readonly SidebarListItem[]; readonly target: SidebarDropTarget } | null {
+  const groupItem = items.find((item) => item.kind === "group" && item.groupKey === groupKey);
+  if (groupItem?.kind !== "group") return null;
+  const memberKeys = groupItem.memberKeys;
+  const moving = new Set<string>([sidebarGroupItemId(groupKey), ...memberKeys]);
+  const block = items.filter((item) => moving.has(sidebarListItemId(item)));
+  const rest = items.filter((item) => !moving.has(sidebarListItemId(item)));
+  const overAt = rest.findIndex((item) => sidebarListItemId(item) === overId);
+  if (block.length === 0 || overAt === -1) return null;
+  const overIndex = side === "below" ? overAt + 1 : overAt;
+  const moved = [...rest.slice(0, overIndex), ...block, ...rest.slice(overIndex)];
+  const section = sectionAtSidebarSlot(moved, overIndex);
+  if (section !== "active") return null;
+  const memberSet = new Set(memberKeys);
+  const pinnedOrder: string[] = [];
+  const activeOrder: string[] = [];
+  let currentSection: SidebarSection = "pinned";
+  for (const item of moved) {
+    if (item.kind === "marker") {
+      if (item.marker === "pinned-divider") currentSection = "active";
+      else if (
+        item.marker === "working-header" ||
+        item.marker === "snoozed-header" ||
+        item.marker === "settled-header"
+      )
+        break;
+    } else if (item.kind === "group") {
+      // The moved group speaks for members a fold may have hidden; the rows of
+      // any other group are already in the list, in their own place.
+      if (item.groupKey === groupKey) {
+        for (const key of memberKeys) {
+          if (currentSection === "pinned") pinnedOrder.push(key);
+          else activeOrder.push(key);
+        }
+      }
+      continue;
+    } else if (memberSet.has(item.key)) continue;
+    else if (currentSection === "pinned") pinnedOrder.push(item.key);
+    else activeOrder.push(item.key);
+  }
+  return { items: moved, target: { section, pinnedOrder, activeOrder } };
+}
+
+export function resolveSidebarGroupDropTarget(
+  items: readonly SidebarListItem[],
+  groupKey: string,
+  overId: string,
+  side?: "above" | "below",
+): SidebarDropTarget | null {
+  return planSidebarGroupMove(items, groupKey, overId, side)?.target ?? null;
 }
 
 export type SidebarThreadDropPlan =

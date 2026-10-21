@@ -16,6 +16,7 @@ export type ThreadActionMenuId =
   | `snooze:${string}`
   | "unsnooze"
   | "rename"
+  | "remove-from-group"
   | "regenerate-title"
   | "mark-unread"
   | "copy"
@@ -71,6 +72,8 @@ export interface ThreadActionMenuState {
     readonly isActive: boolean;
   } | null;
   readonly isPinned: boolean;
+  /** In a group the user made by hand, so it can be taken back out of it. */
+  readonly inGroup: boolean;
   readonly isSettled: boolean;
   readonly autoSettleEnabled: boolean;
   readonly isSnoozed: boolean;
@@ -121,6 +124,7 @@ export function buildThreadActionMenuItems(
             : { id: "pin" as const, label: "Pin thread", icon: "pin" },
         ]
       : []),
+    ...(state.inGroup ? [{ id: "remove-from-group" as const, label: "Remove from group" }] : []),
     ...(state.supports.settlement
       ? [
           state.isSettled

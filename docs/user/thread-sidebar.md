@@ -116,12 +116,35 @@ rename a thread, regenerate its title, or link and unlink a pull request. These 
 appear on web, desktop, and mobile without requiring the originating browser to remain
 open.
 
+### Group the threads of one ticket
+
+On web and desktop, threads whose titles start with the same ticket id — `CI-6305: Save payroll
+IDs`, `CI-6305 anorak: bulk endpoint` — are gathered under a row of their own in the active list,
+whichever projects they belong to. Click that row to fold the group away, and again to bring it
+back; the thread you have open stays visible either way.
+
+To group threads yourself, select them, right-click and choose **Group**, or drag one thread onto
+the **middle** of another — the edges of a row still mean "insert here". Dropping a thread onto a
+group, or onto a thread already in one, adds it to that group. Right-click a group's row to
+**Rename group** or to **Ungroup**; a thread's own menu has **Remove from group**.
+
+What you do by hand wins over what the titles say: a thread you drop into a group stays there, one
+you take out stays out, and renaming a ticket's group makes it yours under the name it already had.
+Threads created later still join their ticket on their own, and a group left with one thread is
+dropped. Groups you make, and the groups you have folded, are kept on this device.
+
+A ticket's threads share one live section: a thread that needs an approval or an answer brings the
+whole ticket back to the active list, and one thread still working keeps the ticket in the Working
+section with it. Pinning, snoozing or settling acts on that thread alone, and takes it out of its
+group.
+
 ### Fold working threads (beta)
 
 Turn on **Settings → General → Working section (beta)** on web and desktop, or **Settings →
 Thread behavior → Working section** on iOS and Android, to move threads that are working or
 monitoring into a collapsed **Working** section below the active list. A thread returns to the top
-of the active list when it finishes, fails, or needs an approval or answer. The Working section
+of the active list when it finishes, fails, or needs an approval or answer — unless it belongs to a
+ticket whose other threads are still working, in which case it waits for them. The Working section
 lists the thread you last sent work to first. Pinned threads stay in the pinned section. Each
 device keeps its own choice.
 

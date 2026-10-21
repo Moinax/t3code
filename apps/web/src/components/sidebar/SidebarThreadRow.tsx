@@ -37,6 +37,7 @@ import {
   CircleDotDashedIcon,
   ClockIcon,
   GitBranchIcon,
+  LayersIcon,
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
@@ -71,6 +72,7 @@ import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
+import { titleWithoutGroupPrefix } from "@t3tools/client-runtime/state/thread-groups";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
   animateSidebarLayoutChanges,
@@ -175,7 +177,7 @@ function terminalProcessLabel(count: number): string {
   return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
 }
 
-function SidebarProviderStack(props: {
+export function SidebarProviderStack(props: {
   thread: SidebarThreadSummary;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
 }) {
@@ -362,13 +364,15 @@ function SidebarThreadTooltip({
   );
 }
 
-function SnoozeMenuButton(props: {
+export function SnoozeMenuButton(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSnooze: (preset: Pick<SnoozePreset, "snoozedUntil">) => void;
   timestampFormat: TimestampFormat;
+  /** What the button snoozes, when it is not this row's own thread. */
+  label?: string;
 }) {
-  const { open, onOpenChange, onSnooze, timestampFormat } = props;
+  const { open, onOpenChange, onSnooze, timestampFormat, label = "Snooze thread" } = props;
   const presets = open ? resolveSnoozePresets(new Date(), timestampFormat) : [];
   return (
     <Menu open={open} onOpenChange={onOpenChange}>
@@ -379,7 +383,7 @@ function SnoozeMenuButton(props: {
               render={
                 <button
                   type="button"
-                  aria-label="Snooze thread"
+                  aria-label={label}
                   onClick={(event) => event.stopPropagation()}
                   onDoubleClick={(event) => event.stopPropagation()}
                   className="inline-flex h-full cursor-pointer items-center gap-0.5 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
@@ -390,7 +394,7 @@ function SnoozeMenuButton(props: {
         >
           <ClockIcon className="size-3" />
         </TooltipTrigger>
-        <TooltipPopup>Snooze thread</TooltipPopup>
+        <TooltipPopup>{label}</TooltipPopup>
       </Tooltip>
       <MenuPopup side="bottom" align="end">
         {presets.map((preset) => (
@@ -431,11 +435,50 @@ export const draftPenClassName = "size-3 shrink-0 text-warning-foreground";
 // useSortable memoizes on its `disabled` object, so a fresh one per render
 // re-renders every row and marker on each sidebar update.
 export const SIDEBAR_SORTABLE_DRAG_DISABLED = { draggable: true } as const;
-const SIDEBAR_SORTABLE_DRAG_ENABLED = { draggable: false } as const;
+export const SIDEBAR_SORTABLE_DRAG_ENABLED = { draggable: false } as const;
 
 // Takes the row's props rather than a render function: a closure from the
 // sidebar body is new on every sidebar render, which rebuilt the bag and
 // re-rendered every memoized row with it.
+/**
+ * Where a release would put the dragged row, drawn on the row it lands
+ * against, in the language the Pinned and Settled boundaries already speak: a
+ * word and a hairline, rather than a bar of its own invention.
+ */
+export function SidebarInsertLine({ side }: { side?: "above" | "below" | undefined }) {
+  if (side === undefined) return null;
+  return (
+    <span
+      aria-hidden
+      data-testid="sidebar-insert-line"
+      className={cn(
+        // The dashed well the Settled shelf shows when it will receive a row,
+        // in the gap this drop would open rather than on the row's own edge.
+        "pointer-events-none absolute inset-x-0 z-50 flex h-9 items-center justify-center rounded-md border border-dashed border-primary/60 bg-background/80 text-xs font-medium text-primary",
+        side === "above" ? "-top-9" : "-bottom-9",
+      )}
+    >
+      Move here
+    </span>
+  );
+}
+
+/** What a release in the middle of a row would do, said on that row. */
+export function SidebarJoinBadge({ label }: { label: string }) {
+  return (
+    <span
+      aria-hidden
+      data-testid="sidebar-join-badge"
+      className="pointer-events-none absolute inset-x-0 top-1/2 z-50 flex -translate-y-1/2 justify-center"
+    >
+      <span className="inline-flex items-center gap-1 rounded-sm bg-primary px-2 py-1 text-2xs font-semibold text-primary-foreground shadow-sm">
+        <LayersIcon aria-hidden className="size-3" />
+        {label}
+      </span>
+    </span>
+  );
+}
+
 export function SortableThreadRow(
   props: Omit<SidebarThreadRowProps, "sortable"> & {
     sortableId: string;
@@ -556,6 +599,14 @@ type SidebarThreadRowProps = {
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   onFileDropThreads?: ((threadRef: ScopedThreadRef, files: File[]) => void) | undefined;
+  /** This row is a member of a group, so it carries the group's rail. */
+  inGroup?: boolean | undefined;
+  /** Last member of its group in this section: the rail ends here. */
+  isGroupEnd?: boolean | undefined;
+  /** Where the line showing a pending drop sits against this row. */
+  insertLine?: "above" | "below" | undefined;
+  /** A drag is hovering this row's middle, so releasing would group into it. */
+  isJoinTarget?: boolean | undefined;
 };
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
@@ -885,6 +936,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
 
   const rowSurfaceClassName = cn(
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    // Releasing here groups into this row rather than inserting beside it.
+    props.isJoinTarget === true && "ring-2 ring-inset ring-primary",
     variantAction === "unsettle" && "[&:not(:hover):not(:focus-within)_*]:text-secondary-label/70",
     props.isActive
       ? "bg-sidebar-row-active text-sidebar-foreground"
@@ -988,7 +1041,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         )}
         dir={textDirection(thread.title)}
       >
-        {thread.title}
+        {props.inGroup === true ? titleWithoutGroupPrefix(thread.title) : thread.title}
       </span>
     );
   const accessibleTitle = isRenaming ? null : <span className="sr-only">{thread.title}</span>;
@@ -1238,10 +1291,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       {...sortableRootProps}
       {...(fileDropHandlers ?? {})}
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
-        sortable?.isDragging && "relative z-20",
+        "relative list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
+        // A ghost, not a copy: the card follows the pointer straight over the
+        // row it is aimed at, and anything solid enough to read turns the two
+        // into one illegible pile.
+        sortable?.isDragging && "z-20 opacity-25",
+        // The rail sits in the card's own left padding, so grouping a thread
+        // costs no width. On the li rather than the card, it closes the gap
+        // between two members instead of restarting at each one.
+        props.inGroup === true &&
+          "relative before:absolute before:inset-y-0 before:left-1 before:z-20 before:w-0.5 before:bg-primary/70 before:content-['']",
+        props.inGroup === true && props.isGroupEnd === true && "before:bottom-3 before:rounded-b",
       )}
     >
+      <SidebarInsertLine side={props.insertLine} />
+      {props.isJoinTarget === true ? <SidebarJoinBadge label="Group" /> : null}
       <Tooltip disabled={snoozeMenuOpen || sortable?.isDragging}>
         <TooltipTrigger
           render={
