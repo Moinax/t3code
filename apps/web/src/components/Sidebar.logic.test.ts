@@ -26,8 +26,8 @@ import {
   resolveSidebarDropTarget,
   resolveSidebarGroupDropTarget,
   planSidebarGroupMove,
-  planSidebarThreadMove,
-  resolveSidebarInsertAnchor,
+  groupKeyAtSidebarSlot,
+  sidebarGroupItemId,
   sidebarListItemId,
   sidebarMarkerId,
   planSidebarThreadDrop,
@@ -1150,18 +1150,66 @@ describe("Working shelf (beta)", () => {
         { kind: "group", groupKey: "CI-1", section: "active", memberKeys: ["g1", "g2"] },
         marker("settled-header"),
       ];
-      const plan = planSidebarGroupMove(folded, "CI-1", "a1");
       // The hidden members take the slot the row landed on.
-      expect(plan?.target.activeOrder).toEqual(["g1", "g2", "a1", "a2"]);
-      // And the arrangement is the list itself, which is what animates the rows.
-      expect(plan?.items.map((item) => (item.kind === "thread" ? item.key : item.kind))).toEqual([
-        "marker",
-        "marker",
-        "group",
+      expect(planSidebarGroupMove(folded, "CI-1", "a1")?.activeOrder).toEqual([
+        "g1",
+        "g2",
         "a1",
         "a2",
-        "marker",
       ]);
+    });
+
+    describe("groupKeyAtSidebarSlot", () => {
+      const groupOf = (key: string) => (key.startsWith("g") ? "CI-1" : null);
+      const open: readonly SidebarListItem[] = [
+        marker("pinned-header"),
+        marker("pinned-divider"),
+        row("a1", "active"),
+        { kind: "group", groupKey: "CI-1", section: "active", memberKeys: ["g1", "g2"] },
+        row("g1", "active"),
+        row("g2", "active"),
+        row("a2", "active"),
+        marker("settled-header"),
+      ];
+      const at = (id: string, side: "above" | "below") =>
+        groupKeyAtSidebarSlot(open, { id, side }, "a1", groupOf);
+
+      it("takes the gap between two of a group's rows for the group", () => {
+        expect(at("g1", "below")).toBe("CI-1");
+        expect(at("g2", "above")).toBe("CI-1");
+      });
+
+      it("counts the group's own row as a side, so the first slot is inside", () => {
+        expect(at(sidebarGroupItemId("CI-1"), "below")).toBe("CI-1");
+      });
+
+      it("leaves the gaps the rail does not reach", () => {
+        // Above the group's row, and after its last member: outside both times.
+        expect(at(sidebarGroupItemId("CI-1"), "above")).toBeNull();
+        expect(at("g2", "below")).toBeNull();
+        expect(at("a2", "below")).toBeNull();
+      });
+
+      it("steps over the row being carried, which has given up its slot", () => {
+        const carried = groupKeyAtSidebarSlot(open, { id: "g1", side: "above" }, "g1", groupOf);
+        // Between the group's row and g2, both of which are the group's.
+        expect(carried).toBe("CI-1");
+      });
+    });
+
+    it("orders a moved group against the members another fold has hidden", () => {
+      const folded: readonly SidebarListItem[] = [
+        marker("pinned-header"),
+        marker("pinned-divider"),
+        { kind: "group", groupKey: "CI-1", section: "active", memberKeys: ["g1", "g2"] },
+        { kind: "group", groupKey: "CI-2", section: "active", memberKeys: ["h1", "h2"] },
+        marker("settled-header"),
+      ];
+      // Without the other group's members the order reads ["g1", "g2"], and the
+      // keys that order writes place the group against nothing.
+      expect(
+        planSidebarGroupMove(folded, "CI-1", sidebarGroupItemId("CI-2"), "below")?.activeOrder,
+      ).toEqual(["h1", "h2", "g1", "g2"]);
     });
 
     it("orders a thread against the members a fold has hidden", () => {
@@ -1196,25 +1244,6 @@ describe("Working shelf (beta)", () => {
         pinnedOrder: [],
         activeOrder: ["a1", "g1", "g2"],
       });
-    });
-
-    it("names the row a release lands against, on the right side of it", () => {
-      const list: readonly SidebarListItem[] = [
-        marker("pinned-header"),
-        marker("pinned-divider"),
-        row("a1", "active"),
-        { kind: "group", groupKey: "CI-1", section: "active", memberKeys: ["g1", "g2"] },
-        row("a2", "active"),
-        marker("settled-header"),
-      ];
-      const ontoGroup = planSidebarThreadMove(list, "a2", sidebarListItemId(list[3]!));
-      expect(resolveSidebarInsertAnchor(ontoGroup!.items, "a2")).toEqual({
-        id: sidebarListItemId(list[3]!),
-        side: "above",
-      });
-      // Last of its section: the line goes under the row before it instead.
-      const toEnd = planSidebarThreadMove(list, "a1", sidebarMarkerId("settled-header"));
-      expect(resolveSidebarInsertAnchor(toEnd!.items, "a1")?.side).toBe("below");
     });
 
     it("never drops into the Working shelf, and keeps it out of the inbox order", () => {

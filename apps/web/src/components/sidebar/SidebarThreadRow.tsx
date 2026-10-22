@@ -432,6 +432,21 @@ type SortableThreadRowBag = Pick<
 export const draftSurfaceClassName = "bg-warning/4 hover:bg-warning/8";
 export const draftPenClassName = "size-3 shrink-0 text-warning-foreground";
 
+/**
+ * The icon and colour each thread state gets. One table, because a folded
+ * group's row stands in for the rows it hides and has to read in their words.
+ */
+export const sidebarStateVisual = {
+  working: { Icon: CircleDashedIcon, className: "text-info" },
+  waiting: { Icon: CircleDotDashedIcon, className: "text-muted-foreground" },
+  approval: { Icon: ShieldQuestionIcon, className: "text-warning-foreground" },
+  input: { Icon: MessageCircleQuestionIcon, className: "text-indigo-600 dark:text-indigo-300" },
+  limited: { Icon: CircleAlertIcon, className: "text-warning" },
+  failed: { Icon: CircleAlertIcon, className: "text-error" },
+  woke: { Icon: AlarmClockIcon, className: "text-warning" },
+  done: { Icon: CircleCheckIcon, className: "text-success" },
+} as const;
+
 // useSortable memoizes on its `disabled` object, so a fresh one per render
 // re-renders every row and marker on each sidebar update.
 export const SIDEBAR_SORTABLE_DRAG_DISABLED = { draggable: true } as const;
@@ -441,41 +456,52 @@ export const SIDEBAR_SORTABLE_DRAG_ENABLED = { draggable: false } as const;
 // sidebar body is new on every sidebar render, which rebuilt the bag and
 // re-rendered every memoized row with it.
 /**
- * Where a release would put the dragged row, drawn on the row it lands
- * against, in the language the Pinned and Settled boundaries already speak: a
- * word and a hairline, rather than a bar of its own invention.
+ * What a release in the middle of a row would do, said on the row itself — the
+ * same dashed well the shelves use, laid over the card it would absorb.
  */
-export function SidebarInsertLine({ side }: { side?: "above" | "below" | undefined }) {
-  if (side === undefined) return null;
+/**
+ * The dashed well shown wherever a release would land, in one place so every
+ * drop this sidebar accepts is drawn in the Settled shelf's language.
+ *
+ * Decorative throughout: the dragged row's own badge announces the destination.
+ */
+export function SidebarDropWell(props: {
+  label: string;
+  /** False holds the resting colours; a well being aimed at turns primary. */
+  active?: boolean;
+  className?: string;
+  testId?: string;
+  children?: ReactNode;
+}) {
   return (
-    <span
+    <div
       aria-hidden
-      data-testid="sidebar-insert-line"
+      data-testid={props.testId}
       className={cn(
-        // The dashed well the Settled shelf shows when it will receive a row,
-        // in the gap this drop would open rather than on the row's own edge.
-        "pointer-events-none absolute inset-x-0 z-50 flex h-9 items-center justify-center rounded-md border border-dashed border-primary/60 bg-background/80 text-xs font-medium text-primary",
-        side === "above" ? "-top-9" : "-bottom-9",
+        "flex items-center justify-center gap-1 rounded-md border border-dashed text-xs",
+        props.active === false
+          ? "border-sidebar-foreground/25 text-sidebar-foreground/80"
+          : "border-primary/40 bg-primary/5 text-primary",
+        props.className,
       )}
     >
-      Move here
-    </span>
+      {props.children}
+      {props.label}
+    </div>
   );
 }
 
-/** What a release in the middle of a row would do, said on that row. */
 export function SidebarJoinBadge({ label }: { label: string }) {
   return (
-    <span
-      aria-hidden
-      data-testid="sidebar-join-badge"
-      className="pointer-events-none absolute inset-x-0 top-1/2 z-50 flex -translate-y-1/2 justify-center"
+    <SidebarDropWell
+      label={label}
+      testId="sidebar-join-badge"
+      // Over the row rather than beside it: joining replaces the row's whole
+      // surface, so the well covers it and hides what it would merge into.
+      className="pointer-events-none absolute inset-x-0.5 inset-y-0.5 z-50 bg-background/90"
     >
-      <span className="inline-flex items-center gap-1 rounded-sm bg-primary px-2 py-1 text-2xs font-semibold text-primary-foreground shadow-sm">
-        <LayersIcon aria-hidden className="size-3" />
-        {label}
-      </span>
-    </span>
+      <LayersIcon aria-hidden className="size-3" />
+    </SidebarDropWell>
   );
 }
 
@@ -603,8 +629,6 @@ type SidebarThreadRowProps = {
   inGroup?: boolean | undefined;
   /** Last member of its group in this section: the rail ends here. */
   isGroupEnd?: boolean | undefined;
-  /** Where the line showing a pending drop sits against this row. */
-  insertLine?: "above" | "below" | undefined;
   /** A drag is hovering this row's middle, so releasing would group into it. */
   isJoinTarget?: boolean | undefined;
 };
@@ -699,57 +723,27 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     isActive: props.isActive,
     isSelected,
   });
-  const topStatus =
+  const topState =
     status === "working"
-      ? {
-          label: thread.goal?.status === "active" ? "Goal" : "Working",
-          icon: "working" as const,
-          className: "text-info",
-        }
+      ? { key: "working" as const, label: thread.goal?.status === "active" ? "Goal" : "Working" }
       : status === "waiting"
-        ? {
-            label: "Waiting",
-            icon: "waiting" as const,
-            className: "text-muted-foreground",
-          }
+        ? { key: "waiting" as const, label: "Waiting" }
         : status === "approval"
-          ? {
-              label: "Approval",
-              icon: "approval" as const,
-              className: "text-warning-foreground",
-            }
+          ? { key: "approval" as const, label: "Approval" }
           : status === "input"
-            ? {
-                label: "Input",
-                icon: "input" as const,
-                className: "text-indigo-600 dark:text-indigo-300",
-              }
+            ? { key: "input" as const, label: "Input" }
             : status === "limited"
-              ? {
-                  label: "Limited",
-                  icon: "failed" as const,
-                  className: "text-warning",
-                }
+              ? { key: "limited" as const, label: "Limited" }
               : status === "failed"
-                ? {
-                    label: "Failed",
-                    icon: "failed" as const,
-                    className: "text-error",
-                  }
+                ? { key: "failed" as const, label: "Failed" }
                 : isWoke
-                  ? {
-                      label: "Woke",
-                      icon: "woke" as const,
-                      className: "text-warning",
-                    }
+                  ? { key: "woke" as const, label: "Woke" }
                   : isUnread
-                    ? {
-                        label: "Done",
-                        icon: "done" as const,
-                        className: "text-success",
-                      }
+                    ? { key: "done" as const, label: "Done" }
                     : null;
-  const isWokeStatus = topStatus?.icon === "woke";
+  // The label is the state's own; its icon and colour come from the table.
+  const topStatus = topState === null ? null : { ...topState, ...sidebarStateVisual[topState.key] };
+  const isWokeStatus = topStatus?.key === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
@@ -953,13 +947,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       "opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none",
     isFileDragOver && "ring-1 ring-inset ring-primary/70",
     isFileDragOver && !props.isActive && !isSelected && "bg-sidebar-row-hover",
+    // Upstream's travelling card, plus an accent outline: a theme is free to
+    // make its row surfaces all but identical to the sidebar, and the card in
+    // the air is the one thing a drag may not leave to chance.
     props.sortable?.isDragging &&
-      "bg-sidebar bg-linear-to-b from-sidebar-row-active to-sidebar-row-active text-sidebar-foreground opacity-100 shadow-lg",
+      "bg-sidebar bg-linear-to-b from-sidebar-row-active to-sidebar-row-active text-sidebar-foreground opacity-100 shadow-lg ring-1 ring-primary/40",
   );
   const sortable = props.sortable;
   const sortableRootProps = sortable
     ? {
         ref: sortable.setNodeRef,
+        // The id dnd-kit knows this row by, so a mid-drag measurement can find
+        // the row again after a drop zone has moved it.
+        "data-drag-id": threadKey,
         style: {
           transform: CSS.Translate.toString(sortable.transform),
           transition: sortable.transition,
@@ -1292,10 +1292,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       {...(fileDropHandlers ?? {})}
       className={cn(
         "relative list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
-        // A ghost, not a copy: the card follows the pointer straight over the
-        // row it is aimed at, and anything solid enough to read turns the two
-        // into one illegible pile.
-        sortable?.isDragging && "z-20 opacity-25",
+        // The card travels and the list closes behind it: its own slot gives
+        // up its height, so the only gap on screen is the one it would land
+        // in. `content-visibility` has to be waived for a slot of no height,
+        // or the card it is still painting would be skipped with it.
+        sortable?.isDragging && "z-20 h-0 py-0 [content-visibility:visible]",
         // The rail sits in the card's own left padding, so grouping a thread
         // costs no width. On the li rather than the card, it closes the gap
         // between two members instead of restarting at each one.
@@ -1304,7 +1305,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         props.inGroup === true && props.isGroupEnd === true && "before:bottom-3 before:rounded-b",
       )}
     >
-      <SidebarInsertLine side={props.insertLine} />
       {props.isJoinTarget === true ? <SidebarJoinBadge label="Group" /> : null}
       <Tooltip disabled={snoozeMenuOpen || sortable?.isDragging}>
         <TooltipTrigger
@@ -1379,7 +1379,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                                   topStatus.className,
                                 )}
                               >
-                                <AlarmClockIcon aria-hidden className="size-4 shrink-0" />
+                                <topStatus.Icon aria-hidden className="size-4 shrink-0" />
                                 <span role="status">{topStatus.label}</span>
                               </button>
                             }
@@ -1393,19 +1393,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             topStatus.className,
                           )}
                         >
-                          {topStatus.icon === "working" ? (
-                            <CircleDashedIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "waiting" ? (
-                            <CircleDotDashedIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "input" ? (
-                            <MessageCircleQuestionIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "approval" ? (
-                            <ShieldQuestionIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "failed" ? (
-                            <CircleAlertIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "done" ? (
-                            <CircleCheckIcon aria-hidden className="size-4 shrink-0" />
-                          ) : null}
+                          <topStatus.Icon aria-hidden className="size-4 shrink-0" />
                           {/* The label alone is the live region: a role="status"
                             wrapper around the ticking duration would make
                             screen readers announce every second. The open
