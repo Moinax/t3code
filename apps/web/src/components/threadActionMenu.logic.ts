@@ -77,7 +77,7 @@ export interface ThreadActionMenuState {
     readonly isActive: boolean;
   } | null;
   readonly isPinned: boolean;
-  /** In a group the user made by hand, so it can be taken back out of it. */
+  /** In a group, read from the titles or made by hand, so it can leave it. */
   readonly inGroup: boolean;
   readonly isSettled: boolean;
   readonly autoSettleEnabled: boolean;
@@ -106,6 +106,10 @@ export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean
     "find",
     "new-thread-on-branch",
     "project-settings",
+    // Grouping is this device's own arrangement of the list: no server call,
+    // so no scope to hold it back. Without this a read-only viewer can group
+    // threads by dragging and then cannot take them apart again.
+    "remove-from-group",
     "mark-unread",
     "share-guest",
     "copy",

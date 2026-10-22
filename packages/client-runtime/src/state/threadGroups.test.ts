@@ -8,6 +8,7 @@ import {
   titleWithoutGroupPrefix,
   dropManualGroup,
   groupStateLabel,
+  addToManualGroup,
   planGroupDrop,
   pruneManualGroups,
   pruneUngroupedKeys,
@@ -336,6 +337,16 @@ describe("manual groups", () => {
   it("suggests the ticket the threads share, when they share one", () => {
     expect(suggestGroupName(["CI-6305 jacket: a", "CI-6305 anorak: b"])).toBe("CI-6305");
     expect(suggestGroupName(["CI-6305 jacket: a", "Unrelated"])).toBe("New group");
+  });
+});
+
+describe("addToManualGroup", () => {
+  it("leaves a group alone when it already holds the thread", () => {
+    // Taking the thread out first is what makes room for it at the end, and a
+    // group of two taken down to one dissolves: adding a member it has would
+    // have deleted the group.
+    const groups = [{ id: "1", name: "Payroll", members: ["a", "b"] }];
+    expect(addToManualGroup(groups, "m:1", "a")).toEqual(groups);
   });
 });
 
