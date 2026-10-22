@@ -121,6 +121,43 @@ describe("sidebar collision detection", () => {
     },
   );
 
+  it("ranks the row under the pointer first, and never the card in the hand", () => {
+    const items = [
+      pinnedHeader,
+      divider,
+      thread("source", "active"),
+      thread("b", "active"),
+      settledHeader,
+    ];
+    const { rects } = layout(items, "source", "b");
+    const rectOf = (key: string) =>
+      rects[items.findIndex((item) => sidebarListItemId(item) === key)]!;
+    const detector = createSidebarCollisionDetection(() => true, { items });
+    const ranked = detector({
+      active: {
+        id: "source",
+        data: { current: {} },
+        rect: { current: { initial: rectOf("source"), translated: rectOf("b") } },
+      },
+      collisionRect: rectOf("b"),
+      droppableRects: new Map(items.map((item, index) => [sidebarListItemId(item), rects[index]!])),
+      droppableContainers: items.map((item, index) => ({
+        id: sidebarListItemId(item),
+        key: sidebarListItemId(item),
+        disabled: false,
+        data: { current: {} },
+        node: { current: null },
+        rect: { current: rects[index]! },
+      })),
+      // Low in b, where the Settled header's centre is the nearer one: the row
+      // the hand is inside of answers, or a drop lands a row from where it was
+      // aimed. The card travels under the hand, so it is never a candidate.
+      pointerCoordinates: { x: 10, y: rectOf("b").bottom - 3 },
+    } satisfies Parameters<CollisionDetection>[0]);
+    expect(ranked.map((collision) => collision.id)).not.toContain("source");
+    expect(ranked[0]?.id).toBe("b");
+  });
+
   it.each([
     { sourceSection: "active", pins: 0 },
     { sourceSection: "active", pins: 1 },

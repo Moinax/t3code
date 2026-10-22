@@ -147,8 +147,13 @@ dropped. Groups you make, and the groups you have folded, are kept on this devic
 
 A ticket's threads share one live section: a thread that needs an approval or an answer brings the
 whole ticket back to the active list, and one thread still working keeps the ticket in the Working
-section with it. Pinning, snoozing or settling acts on that thread alone, and takes it out of its
-group.
+section with it. Pinning, snoozing or settling one thread acts on that thread alone; its group
+follows it onto that shelf and keeps a row there once two of its threads are on it.
+
+A group keeps a row wherever its threads are. Drop a group's row on **Pin here** or **Settle here**
+to put the whole group away, and carry that row back into the list to bring the whole group back,
+unpinned or un-settled. A settled group's row offers the same thing without the drag. Groups stay
+folded on a shelf until you open them there.
 
 ### Fold working threads (beta)
 

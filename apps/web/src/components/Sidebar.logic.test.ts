@@ -24,7 +24,6 @@ import {
   shouldRecedeSidebarThread,
   sortInboxThreadsByReturn,
   resolveSidebarDropTarget,
-  resolveSidebarGroupDropTarget,
   planSidebarGroupMove,
   groupKeyAtSidebarSlot,
   sidebarGroupItemId,
@@ -1186,16 +1185,16 @@ describe("Working shelf (beta)", () => {
         row("s1", "settled"),
       ];
       // Above the row it was dropped on, members in their own order.
-      expect(resolveSidebarGroupDropTarget(grouped, "CI-1", "a1")).toEqual({
+      expect(planSidebarGroupMove(grouped, sidebarGroupItemId("CI-1"), "a1")).toEqual({
         section: "active",
         pinnedOrder: ["p1"],
         activeOrder: ["g1", "g2", "a1", "a2"],
       });
       // The group's own rows move with it, so they are no place to drop it.
-      expect(resolveSidebarGroupDropTarget(grouped, "CI-1", "g2")).toBeNull();
+      expect(planSidebarGroupMove(grouped, sidebarGroupItemId("CI-1"), "g2")).toBeNull();
       // Pinning or settling a group is not a drag.
-      expect(resolveSidebarGroupDropTarget(grouped, "CI-1", "p1")).toBeNull();
-      expect(resolveSidebarGroupDropTarget(grouped, "CI-1", "s1")).toBeNull();
+      expect(planSidebarGroupMove(grouped, sidebarGroupItemId("CI-1"), "p1")).toBeNull();
+      expect(planSidebarGroupMove(grouped, sidebarGroupItemId("CI-1"), "s1")).toBeNull();
     });
 
     it("moves a folded group, whose members have no rows of their own", () => {
@@ -1208,7 +1207,7 @@ describe("Working shelf (beta)", () => {
         marker("settled-header"),
       ];
       // The hidden members take the slot the row landed on.
-      expect(planSidebarGroupMove(folded, "CI-1", "a1")?.activeOrder).toEqual([
+      expect(planSidebarGroupMove(folded, sidebarGroupItemId("CI-1"), "a1")?.activeOrder).toEqual([
         "g1",
         "g2",
         "a1",
@@ -1265,7 +1264,12 @@ describe("Working shelf (beta)", () => {
       // Without the other group's members the order reads ["g1", "g2"], and the
       // keys that order writes place the group against nothing.
       expect(
-        planSidebarGroupMove(folded, "CI-1", sidebarGroupItemId("CI-2"), "below")?.activeOrder,
+        planSidebarGroupMove(
+          folded,
+          sidebarGroupItemId("CI-1"),
+          sidebarGroupItemId("CI-2"),
+          "below",
+        )?.activeOrder,
       ).toEqual(["h1", "h2", "g1", "g2"]);
     });
 
@@ -1299,6 +1303,44 @@ describe("Working shelf (beta)", () => {
       ).toEqual({
         section: "active",
         pinnedOrder: [],
+        activeOrder: ["a1", "g1", "g2"],
+      });
+    });
+
+    it("lands on the side of the hovered row the pointer is on", () => {
+      // Without a side the slot is read from the list alone, so a drag coming
+      // from above lands after the row it has only just reached.
+      expect(resolveSidebarDropTarget(items, "p1", "a2", "above")?.activeOrder).toEqual([
+        "a1",
+        "p1",
+        "a2",
+      ]);
+      expect(resolveSidebarDropTarget(items, "p1", "a2", "below")?.activeOrder).toEqual([
+        "a1",
+        "a2",
+        "p1",
+      ]);
+    });
+
+    it("moves the group row that was picked up, not its twin on another shelf", () => {
+      const shelved: readonly SidebarListItem[] = [
+        marker("pinned-header"),
+        { kind: "group", groupKey: "CI-1", section: "pinned", memberKeys: ["p1", "p2"] },
+        marker("pinned-divider"),
+        { kind: "group", groupKey: "CI-1", section: "active", memberKeys: ["g1", "g2"] },
+        row("g1", "active"),
+        row("g2", "active"),
+        row("a1", "active"),
+        marker("settled-header"),
+      ];
+      // The inbox's row carries the inbox's threads: the pinned pair keeps its
+      // own members, in the pinned order, where picking either row up by the
+      // group's key alone would have moved the other one's block.
+      expect(
+        planSidebarGroupMove(shelved, sidebarGroupItemId("CI-1", "active"), "a1", "below"),
+      ).toEqual({
+        section: "active",
+        pinnedOrder: ["p1", "p2"],
         activeOrder: ["a1", "g1", "g2"],
       });
     });

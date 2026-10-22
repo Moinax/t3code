@@ -196,9 +196,10 @@ import {
   resolveAdjacentThreadId,
   resolveSidebarSweepKeys,
   groupKeyAtSidebarSlot,
+  sidebarMarkerId,
   sidebarSectionAtSlot,
   resolveSidebarDropTarget,
-  resolveSidebarGroupDropTarget,
+  planSidebarGroupMove,
   resolveSidebarDropVerb,
   resolveSidebarThreadSection,
   resolveSidebarReorderableThreadKeys,
@@ -241,7 +242,7 @@ import {
   type ThreadGroup,
   type ThreadGroupEntry,
 } from "@t3tools/client-runtime/state/thread-groups";
-import { createSidebarCollisionDetection, createSidebarSortingStrategy } from "./Sidebar.drag";
+import { createSidebarCollisionDetection, sidebarRowsStayPut } from "./Sidebar.drag";
 import { SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
 import {
@@ -383,10 +384,7 @@ const NO_COLLAPSED_GROUPS: readonly string[] = [];
  * answer for a list that is no longer on screen.
  */
 function sidebarRow(list: HTMLElement | null, id: string): HTMLElement | null {
-  for (const node of list?.querySelectorAll<HTMLElement>("[data-drag-id]") ?? []) {
-    if (node.getAttribute("data-drag-id") === id) return node;
-  }
-  return null;
+  return list?.querySelector<HTMLElement>(`[data-drag-id="${CSS.escape(id)}"]`) ?? null;
 }
 
 function sidebarRowRect(list: HTMLElement | null, id: string): DOMRect | null {
@@ -408,6 +406,16 @@ function sidebarSlotOrigin(node: HTMLElement): { x: number; y: number } | null {
 }
 
 type SidebarDropSlot = { readonly id: string; readonly side: "above" | "below" };
+
+/**
+ * Which shelf a row sits on, for the maps a group's row is read from. Active
+ * and Working are one shelf: they are laid out together, and a group only ever
+ * has a row in one of them.
+ */
+function groupShelfKey(groupKey: string, section: SidebarSection): string {
+  const shelf = section === "pinned" || section === "settled" ? section : "live";
+  return `${shelf}:${groupKey}`;
+}
 
 const SIDEBAR_AUTO_SCROLL = { threshold: { x: 0, y: 0.2 } };
 
@@ -448,38 +456,6 @@ interface SidebarThreadPartitionInput {
 
 function threadShellKey(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
   return scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-}
-
-const NO_DRAGGED_ORDER: readonly string[] = [];
-const NO_DRAGGED_ORDERS: {
-  readonly settledOrder: readonly string[];
-  readonly activeOrder: readonly string[] | undefined;
-} = { settledOrder: NO_DRAGGED_ORDER, activeOrder: undefined };
-
-function resolveDraggedOrders(input: {
-  readonly drag: { readonly activeKey: string; readonly occurredAt: string };
-  readonly threadByKey: ReadonlyMap<string, EnvironmentThreadShell>;
-  readonly settledThreads: readonly EnvironmentThreadShell[];
-  readonly activeThreads: readonly EnvironmentThreadShell[];
-  readonly workingShelfEnabled: boolean;
-}): typeof NO_DRAGGED_ORDERS {
-  const { drag, threadByKey, settledThreads, activeThreads, workingShelfEnabled } = input;
-  const thread = threadByKey.get(drag.activeKey);
-  if (thread === undefined) return NO_DRAGGED_ORDERS;
-  const others = (list: readonly EnvironmentThreadShell[]) =>
-    list.filter((candidate) => threadShellKey(candidate) !== drag.activeKey);
-  return {
-    settledOrder: sortSettledThreads([
-      ...others(settledThreads),
-      applySidebarThreadDrop(thread, "settled", drag.occurredAt),
-    ]).map(threadShellKey),
-    activeOrder: workingShelfEnabled
-      ? sortInboxThreadsByReturn(
-          [...others(activeThreads), applySidebarThreadDrop(thread, "active", drag.occurredAt)],
-          inboxReturns.returnedAt,
-        ).map(threadShellKey)
-      : undefined,
-  };
 }
 
 function routeThreadOnly(
@@ -621,7 +597,7 @@ function useSidebarThreads(input: {
     }
     return visible.length === settledThreads.length ? settledThreads : visible;
   })();
-  const renderedSettledThreads = settledShelfExpanded
+  const renderedSettledRows = settledShelfExpanded
     ? visibleSettledThreads
     : routeThreadOnly(visibleSettledThreads, routeRowThreadKey);
   const visibleSnoozedThreads = snoozedShelfExpanded
@@ -637,21 +613,58 @@ function useSidebarThreads(input: {
     NO_COLLAPSED_GROUPS,
     COLLAPSED_GROUPS_SCHEMA,
   );
-  const [activeEntries = [], workingEntries = []] = layoutThreadGroups({
-    sections: [activeThreads, visibleWorkingThreads],
-    groupKeyOf,
-    nameOf: groupNameOf,
-    collapsed: new Set(collapsedGroups),
-    keepThread: (thread) => threadShellKey(thread) === routeRowThreadKey,
-  });
+  const layoutOf = (
+    sections: readonly (readonly EnvironmentThreadShell[])[],
+    collapsed: ReadonlySet<string> | ((key: string) => boolean),
+  ) =>
+    layoutThreadGroups({
+      sections,
+      groupKeyOf,
+      nameOf: groupNameOf,
+      collapsed,
+      keepThread: (thread) => threadShellKey(thread) === routeRowThreadKey,
+    });
+  // A shelf holds what has been put away, so a group keeps to one row there
+  // until it is opened on that shelf: `collapsedGroups` names the inbox's
+  // folds, and a shelf's entries name its unfolds instead.
+  const shelfFold = (section: "pinned" | "settled") => (key: string) =>
+    !collapsedGroups.includes(`${section}:${key}`);
+  // One pass per shelf, so a group's row only appears where two of its threads
+  // actually are: a lone member of a ticket is just a thread.
+  const [activeEntries = [], workingEntries = []] = layoutOf(
+    [activeThreads, visibleWorkingThreads],
+    new Set(collapsedGroups),
+  );
+  const [pinnedEntries = []] = layoutOf([pinnedThreads], shelfFold("pinned"));
+  const [settledEntries = []] = layoutOf([renderedSettledRows], shelfFold("settled"));
   const threadsOf = (entries: readonly ThreadGroupEntry<EnvironmentThreadShell>[]) =>
     entries.flatMap((entry) => (entry.kind === "thread" ? [entry.thread] : []));
   const renderedActiveThreads = threadsOf(activeEntries);
   const renderedWorkingThreads = threadsOf(workingEntries);
-  const liveGroupKeys = new Set(
-    [...activeEntries, ...workingEntries].flatMap((entry) =>
+  const renderedPinnedThreads = threadsOf(pinnedEntries);
+  const renderedSettledThreads = threadsOf(settledEntries);
+  // Both names a fold can go under: the inbox folds by group, a shelf unfolds
+  // by group *and* shelf, and the prune must keep whichever is on screen.
+  const liveGroupKeys = new Set([
+    ...[...activeEntries, ...workingEntries].flatMap((entry) =>
       entry.kind === "group" ? [entry.group.key] : [],
     ),
+    ...pinnedEntries.flatMap((entry) =>
+      entry.kind === "group" ? [`pinned:${entry.group.key}`] : [],
+    ),
+    ...settledEntries.flatMap((entry) =>
+      entry.kind === "group" ? [`settled:${entry.group.key}`] : [],
+    ),
+  ]);
+  // Folded rows stay out of the ordered list like a collapsed shelf's: selection,
+  // sweeps, jump hints and traversal must not reach a hidden row. Fold pruning uses
+  // every foldable group, not rows: a project filter hides a group's row while its
+  // threads remain, and pruning against rows would forget that fold.
+  const foldableGroupKeys = new Set(
+    threads.flatMap((thread) => {
+      const key = groupKeyOf(thread);
+      return key === null ? [] : [key, `pinned:${key}`, `settled:${key}`];
+    }),
   );
   const projectFolders =
     folderGroups === null
@@ -673,11 +686,8 @@ function useSidebarThreads(input: {
               : EMPTY_THREADS,
           };
         });
-  // Rows a fold hides are off screen, so they stay out of the ordered list the
-  // same way a collapsed shelf's rows do: range selection, action sweeps, jump
-  // hints and thread traversal must not reach a row the user cannot see.
   const orderedThreads = [
-    ...pinnedThreads,
+    ...renderedPinnedThreads,
     ...(projectFolders === null
       ? renderedActiveThreads
       : projectFolders.flatMap((folder) => folder.threads)),
@@ -706,7 +716,6 @@ function useSidebarThreads(input: {
       ...snoozedThreads,
       ...settledThreads,
     ],
-    settledVisibleCount,
     settledCount,
     olderSettledShelf,
     hiddenSettledCount: Math.max(0, settledCount - visibleSettledThreads.length),
@@ -729,8 +738,10 @@ function useSidebarThreads(input: {
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
+    pinnedEntries,
     activeEntries,
     workingEntries,
+    settledEntries,
     manualGroups,
     setManualGroups,
     setUngroupedThreads,
@@ -745,12 +756,8 @@ function useSidebarThreads(input: {
     liveGroupKeys,
     renderedActiveThreads,
     renderedWorkingThreads,
-    // Drop planning reads the slot a row was dropped into, which only exists
-    // among the rendered rows; the unfolded activeKeys below still answer
-    // "is this thread canonically active?" for the optimistic-drop release.
-    renderedActiveKeys: renderedActiveThreads.map(threadShellKey),
     toggleGroup: (groupKey: string) =>
-      setCollapsedGroups((current) => toggleCollapsedGroup(current, groupKey, liveGroupKeys)),
+      setCollapsedGroups((current) => toggleCollapsedGroup(current, groupKey, foldableGroupKeys)),
     orderedThreadKeys: orderedThreads.map(threadShellKey),
     threadByKey: new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread] as const)),
     // Ordering reaches rows the screen does not: a folded group's members hold
@@ -1073,8 +1080,6 @@ function checkThreadOperations(
 
 const SIDEBAR_DRAG_DISTANCE = 6;
 
-const SIDEBAR_DRAG_LABEL_HEIGHT = 24;
-
 const threadSearchResultId = (index: number) => `sidebar-thread-search-result-${index}`;
 
 // Continuations that outlive a render read the open thread from the router.
@@ -1262,6 +1267,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // Where inside the row the hand took hold of it, so the card can hang from
   // that same point for the whole gesture.
   const grabOffsetRef = useRef<{ x: number; y: number } | null>(null);
+  // The open gaps, as `restingY` last measured them. Nothing moves within one
+  // step of the gesture, so both entry points below drop it and re-measure.
+  const restingGapsRef = useRef<ReadonlyArray<{ top: number; height: number }> | null>(null);
   const contextDragKeyRef = useRef<string | null>(null);
   // A group's row answers for no thread, so what the ghost says is settled
   // when the drag starts rather than looked up per move.
@@ -1510,7 +1518,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     settledThreads,
     snoozeNow,
     searchableThreads,
-    settledVisibleCount,
     settledCount,
     olderSettledShelf,
     hiddenSettledCount,
@@ -1523,17 +1530,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleWorkingShelf,
     projectFolders,
     toggleProjectFolder,
-    renderedSettledThreads,
     visibleSnoozedThreads,
+    pinnedEntries,
     activeEntries,
     workingEntries,
+    settledEntries,
     manualGroups,
     setManualGroups,
     setUngroupedThreads,
     groupKeyOf,
     membersOfGroup,
     liveGroupKeys,
-    renderedActiveKeys,
     toggleGroup,
     orderedThreadKeys,
     threadByKey,
@@ -2099,6 +2106,22 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       }
     })();
   };
+  const unsettleThreads = (threadKeys: readonly string[]) => {
+    for (const threadKey of threadKeys) {
+      const thread = threadByAnyKey.get(threadKey);
+      if (!thread || thread.settledOverride !== "settled") continue;
+      attemptUnsettle(scopeThreadRef(thread.environmentId, thread.id));
+    }
+  };
+  const unpinThreads = (threadKeys: readonly string[]) => {
+    for (const threadKey of threadKeys) {
+      const thread = threadByAnyKey.get(threadKey);
+      if (!thread || thread.pinnedAt == null) continue;
+      // The group's row is the deliberate gesture; the per-thread confirmation
+      // would ask once for each of them.
+      void unpinThread(scopeThreadRef(thread.environmentId, thread.id));
+    }
+  };
   const pinThreads = (threadKeys: readonly string[]) => {
     for (const threadKey of threadKeys) {
       const thread = threadByAnyKey.get(threadKey);
@@ -2122,11 +2145,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     })();
   };
 
-  // The same members the group's row was built from: `membersOfGroup` answers
-  // for every section, so a ticket with a settled sibling would start a drag
-  // in the wrong section and then refuse to move.
-  const groupMemberKeysOf = (groupKey: string) =>
-    (groupMembersByKey.get(groupKey) ?? []).map((member) => member.key);
+  // The members of one row, which is not the members of its group:
+  // `membersOfGroup` answers for every section, and a row speaks for the
+  // threads on its own shelf alone. The list already carries them.
+  const groupItemMemberKeys = (itemId: string): readonly string[] => {
+    const item = sidebarListItems.find((candidate) => sidebarListItemId(candidate) === itemId);
+    return item?.kind === "group" ? item.memberKeys : [];
+  };
   const handleThreadDragStart = (event: DragStartEvent) => {
     const activeKey = String(event.active.id);
     contextDragKeyRef.current = activeKey;
@@ -2135,14 +2160,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       draggedGroupKey === null
         ? null
         : {
-            title: groupByKey.get(draggedGroupKey)?.name ?? draggedGroupKey,
-            count: groupMemberKeysOf(draggedGroupKey).length,
+            title: manualGroupNameOf(manualGroups, draggedGroupKey) ?? draggedGroupKey,
+            count: groupItemMemberKeys(activeKey).length,
           };
     // A group sits wherever its members sit, so its first one answers for it.
     const activeSection =
       draggedGroupKey === null
         ? sectionByThreadKey.get(activeKey)
-        : sectionByThreadKey.get(groupMemberKeysOf(draggedGroupKey)[0] ?? "");
+        : sectionByThreadKey.get(groupItemMemberKeys(activeKey)[0] ?? "");
     if (activeSection === undefined) return;
     listMotionRef.current?.suspend();
     // Read before this render collapses the row's slot: its height is the gap
@@ -2173,43 +2198,59 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     string,
     { readonly group: ThreadGroup; readonly isGroupEnd: boolean }
   >();
+  // Keyed by shelf and group, because a group keeps a row on every shelf its
+  // threads reach and each row stands for the threads on that shelf alone. By
+  // group alone, Pinned's row would list the inbox's threads, write their keys
+  // into the pinned order, and read its fold from whichever shelf wrote last.
   const groupByKey = new Map<string, ThreadGroup>();
   const groupMembersByKey = new Map<string, SidebarGroupMember[]>();
-  for (const entry of [...activeEntries, ...workingEntries]) {
-    if (entry.kind === "group") {
-      groupByKey.set(entry.group.key, entry.group);
-      continue;
+  for (const [entries, section] of [
+    [pinnedEntries, "pinned"],
+    [activeEntries, "active"],
+    [workingEntries, "working"],
+    [settledEntries, "settled"],
+  ] as const) {
+    for (const entry of entries) {
+      if (entry.kind === "group") {
+        groupByKey.set(groupShelfKey(entry.group.key, section), entry.group);
+        continue;
+      }
+      if (entry.group === null) continue;
+      const key = threadShellKey(entry.thread);
+      groupEntryByThreadKey.set(key, { group: entry.group, isGroupEnd: entry.isGroupEnd });
     }
-    if (entry.group === null) continue;
-    const key = threadShellKey(entry.thread);
-    groupEntryByThreadKey.set(key, { group: entry.group, isGroupEnd: entry.isGroupEnd });
   }
-  for (const thread of [...activeThreads, ...workingThreads]) {
-    const groupKey = groupKeyOf(thread);
-    if (groupKey === null || !groupByKey.has(groupKey)) continue;
-    const status = resolveSidebarThreadStatus(thread);
-    const members = groupMembersByKey.get(groupKey) ?? [];
-    members.push({
-      key: threadShellKey(thread),
-      project: projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
-      tone: threadWantsAnAnswer(thread)
-        ? "attention"
-        : status === "working" || status === "waiting"
-          ? "working"
-          : "done",
-      title: thread.title,
-      thread,
-      providerEntryByInstanceId:
-        providerEntriesByEnvironment.get(thread.environmentId) ?? EMPTY_PROVIDER_ENTRIES,
-      canSettle:
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement ===
-          true && thread.settledOverride !== "settled",
-      canSnooze:
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true &&
-        canSnooze(thread, { now: snoozeNow }),
-    });
-    groupMembersByKey.set(groupKey, members);
-  }
+  for (const [threads, section] of [
+    [pinnedThreads, "pinned"],
+    [activeThreads, "active"],
+    [workingThreads, "working"],
+    [settledThreads, "settled"],
+  ] as const)
+    for (const thread of threads) {
+      const plainKey = groupKeyOf(thread);
+      const groupKey = plainKey === null ? null : groupShelfKey(plainKey, section);
+      if (groupKey === null || !groupByKey.has(groupKey)) continue;
+      const status = resolveSidebarThreadStatus(thread);
+      const members = groupMembersByKey.get(groupKey) ?? [];
+      members.push({
+        key: threadShellKey(thread),
+        project: projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
+        tone: threadWantsAnAnswer(thread)
+          ? "attention"
+          : status === "working" || status === "waiting"
+            ? "working"
+            : "done",
+        title: thread.title,
+        thread,
+        providerEntryByInstanceId:
+          providerEntriesByEnvironment.get(thread.environmentId) ?? EMPTY_PROVIDER_ENTRIES,
+        canSettle: serverConfigs.has(thread.environmentId) && thread.settledOverride !== "settled",
+        isSettled: thread.settledOverride === "settled",
+        isPinned: thread.pinnedAt != null,
+        canSnooze: serverConfigs.has(thread.environmentId) && canSnooze(thread, { now: snoozeNow }),
+      });
+      groupMembersByKey.set(groupKey, members);
+    }
   const sidebarListItemsFresh = ((): readonly SidebarListItem[] => {
     const rowsOf = (
       list: readonly EnvironmentThreadShell[],
@@ -2231,9 +2272,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               kind: "group",
               groupKey: entry.group.key,
               section,
-              memberKeys: (groupMembersByKey.get(entry.group.key) ?? []).map(
-                (member) => member.key,
-              ),
+              memberKeys: (
+                groupMembersByKey.get(groupShelfKey(entry.group.key, section)) ?? []
+              ).map((member) => member.key),
             }
           : {
               kind: "thread",
@@ -2254,8 +2295,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       return [];
     }
     const items: SidebarListItem[] = [{ kind: "marker", marker: "pinned-header" }];
-    const pinnedRows = rowsOf(pinnedThreads, "pinned");
-    items.push(...pinnedRows);
+    items.push(...itemsOf(pinnedEntries, "pinned"));
     items.push({ kind: "marker", marker: "pinned-divider" });
     const activeRows = itemsOf(activeEntries, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
@@ -2269,9 +2309,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       items.push(...rowsOf(visibleSnoozedThreads, "snoozed"));
     }
     items.push({ kind: "marker", marker: "settled-header" });
-    const settledRows = rowsOf(renderedSettledThreads, "settled");
     items.push({ kind: "marker", marker: "settled-placeholder" });
-    items.push(...settledRows);
+    items.push(...itemsOf(settledEntries, "settled"));
     return items;
   })();
   // Preserve the list while streamed updates leave order unchanged to retain row memoization.
@@ -2325,6 +2364,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // the row under the pointer changes, so a side read there alone never
   // flipped while the pointer crossed the row it was already over.
   const handleThreadDragOver = (event: DragOverEvent | DragMoveEvent) => {
+    restingGapsRef.current = null;
     const draggedGroupKey = sidebarGroupKeyFromItemId(String(event.active.id));
     const activeRect = event.active.rect.current.translated;
     const overId = event.over === null ? null : String(event.over.id);
@@ -2357,9 +2397,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             String(event.over.id),
             hoveredSide,
           )
-        : resolveSidebarGroupDropTarget(
+        : planSidebarGroupMove(
             sidebarListItems,
-            draggedGroupKey,
+            String(event.active.id),
             String(event.over.id),
             hoveredSide,
           );
@@ -2375,7 +2415,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       overItem.kind !== "marker" &&
       (overItem.section === "active" || overItem.section === "working");
     const joinable =
-      sidebarGroupKeyFromItemId(String(event.active.id)) === null &&
+      draggedGroupKey === null &&
       joinableSection &&
       (overItem.kind === "group" ||
         (overItem.kind === "thread" && !groupEntryByThreadKey.has(overItem.key)));
@@ -2397,14 +2437,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         : null;
     // The edge of the hovered row the drop belongs to, read from the dragged
     // card itself: the row it is nearest the top of is the row it goes above.
-    // Only a row carries a zone. Over the dragged row itself, over a shelf
-    // boundary, or over anything a group may not land in, the last zone is
-    // held rather than blinked out — a gesture that loses its answer every
-    // time it passes a marker reads as the list flickering.
-    const anchorRow =
-      overId === null || overId === event.active.id
-        ? null
-        : (sidebarListItems.find((item) => sidebarListItemId(item) === overId) ?? null);
+    // Over the dragged row, a shelf boundary or anywhere a group may not land, the
+    // last zone is held rather than blinked out, which reads as flicker.
+    const anchorRow = overId === null || overId === event.active.id ? null : (overItem ?? null);
     // A shelf with no rows of its own shows a well where its first row would
     // go, and two wells are two answers to one gesture.
     const shelfWell =
@@ -2414,16 +2449,30 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         : target.section === "settled"
           ? settledThreads.length === 0
           : activeThreads.length === 0);
-    const insertAnchor =
+    const nextAnchor: SidebarDropSlot | "hold" | null =
       joinTargetId !== null || hoveredSide === undefined || shelfWell
         ? null
         : anchorRow === null || anchorRow.kind === "marker" || target === null
-          ? (dragState?.insertAnchor ?? null)
+          ? "hold"
           : { id: overId!, side: hoveredSide };
-    const groupShelf = draggedGroupKey === null ? null : groupShelfDrop(overId, hoveredSide);
+    // The band under a shelf is that shelf's own last slot, and a group
+    // already on it has no use for it: there, the only thing the gesture can
+    // mean is leaving. Without this the hand stops just short of the inbox and
+    // the release reorders the shelf it never left.
+    const leavingShelf =
+      draggedGroupKey !== null &&
+      dragState?.activeSection === "pinned" &&
+      overId === sidebarMarkerId("pinned-divider");
+    const groupShelf =
+      draggedGroupKey === null
+        ? null
+        : leavingShelf
+          ? "active"
+          : groupShelfDrop(overId, hoveredSide);
     setDragState((current) => {
       if (current === null || current.activeKey !== String(event.active.id)) return current;
       const nextSection = target?.section ?? groupShelf;
+      const insertAnchor = nextAnchor === "hold" ? current.insertAnchor : nextAnchor;
       // Pointer moves arrive at the frame rate; a fresh object for each one
       // re-renders the whole sidebar, which is most of a drag's cost.
       if (
@@ -2437,31 +2486,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     });
   };
   const sortableIds = sidebarListItems.map(sidebarListItemId);
-  // Keep non-drag orders constant to preserve sorting strategy and row identity during streaming.
-  const { settledOrder: draggedSettledOrder, activeOrder: draggedActiveOrder } =
-    dragState === null
-      ? NO_DRAGGED_ORDERS
-      : resolveDraggedOrders({
-          drag: dragState,
-          threadByKey,
-          settledThreads,
-          activeThreads,
-          workingShelfEnabled,
-        });
-  const sidebarSortingStrategy = createSidebarSortingStrategy({
-    items: sidebarListItems,
-    // Nothing translates. A drag used to reshuffle every row to preview its
-    // landing, which read as the whole list jumping about; the only motion now
-    // is the drop zone opening in place, and the rows below it making room.
-    enabled: false,
-    boundaryLabelHeight: SIDEBAR_DRAG_LABEL_HEIGHT,
-    settledOrder: draggedSettledOrder,
-    ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
-    settledExpanded: settledShelfExpanded,
-    settledVisibleCount,
-    routeThreadKey: routeRowThreadKey,
-    snoozedThreadCount: snoozedThreads.length,
-  });
   const draggedThreadKey = dragState?.activeKey;
   const draggedFromSection = dragState?.activeSection;
   const dragActivationY = dragState?.activationY;
@@ -2479,13 +2503,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
    * inside one (hysteresis); a shelf's standing well is open all drag and part of the rest.
    */
   const restingY = useStableCallback((y: number) => {
+    // Measured once per step of the gesture: the collision pass asks this for
+    // every row, and a list where every interstice is a gap would otherwise
+    // read every gap's box once per row.
+    const gaps =
+      restingGapsRef.current ??
+      (restingGapsRef.current = [
+        ...(threadListRef.current?.querySelectorAll<HTMLElement>(
+          '[data-testid="sidebar-drop-zone"]',
+        ) ?? []),
+      ]
+        .map((node) => node.getBoundingClientRect())
+        .filter((rect) => rect.height > 0)
+        .map((rect) => ({ top: rect.top, height: rect.height })));
     let shift = 0;
-    for (const node of threadListRef.current?.querySelectorAll<HTMLElement>(
-      '[data-testid="sidebar-drop-zone"]',
-    ) ?? []) {
-      const rect = node.getBoundingClientRect();
-      if (rect.height > 0) shift += Math.min(rect.height, Math.max(0, y - rect.top));
-    }
+    for (const gap of gaps) shift += Math.min(gap.height, Math.max(0, y - gap.top));
     return y - shift;
   });
   // The hand's own position, which only the collision pass is given. Every
@@ -2495,6 +2527,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const trackPointer =
     (detection: CollisionDetection): CollisionDetection =>
     (args) => {
+      restingGapsRef.current = null;
       if (args.pointerCoordinates !== null) pointerRef.current = args.pointerCoordinates;
       return detection(args);
     };
@@ -2518,7 +2551,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           // The collision pass has no side to offer, so a marker counts when
           // either of its sides is a shelf.
           (id) =>
-            resolveSidebarGroupDropTarget(sidebarListItems, draggedGroupKey, id) !== null ||
+            planSidebarGroupMove(sidebarListItems, draggedThreadKey, id) !== null ||
             groupShelfDrop(id) !== null ||
             groupShelfDrop(id, "below") !== null,
           { items: sidebarListItems, activationY: dragActivationY ?? null, restingY },
@@ -2545,7 +2578,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               pinnedOrder: pinnedKeys,
               pinnedKeysById,
               reorderableKeys: draggableThreadKeys,
-              activeOrder: renderedActiveKeys,
+              activeOrder: activeKeys,
               activeKeysById,
               activeReorderableKeys: activeReorderableThreadKeys,
               activeTimeOrdered: workingShelfEnabled,
@@ -2574,9 +2607,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const drop = {
       draggedKey,
       targetGroupKey,
-      targetGroupMembers: (groupMembersByKey.get(targetGroupKey ?? "") ?? []).map(
-        (member) => member.key,
-      ),
+      targetGroupMembers:
+        targetGroupKey === null ? [] : membersOfGroup(targetGroupKey).map((member) => member.key),
       targetThreadKey,
       newGroupId: randomUUID(),
       newGroupName: suggestGroupName(
@@ -2604,10 +2636,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
    * keys at the slot the block landed on, and the ordinary assignment path
    * writes them. One drop, one arrangement, exactly as dragging a thread.
    */
-  const moveGroup = (groupKey: string, overId: string | null, side?: "above" | "below") => {
+  const moveGroup = (groupItemId: string, overId: string | null, side?: "above" | "below") => {
     if (overId === null) return;
-    const memberKeys = groupMemberKeysOf(groupKey);
-    const target = resolveSidebarGroupDropTarget(sidebarListItems, groupKey, overId, side);
+    const memberKeys = groupItemMemberKeys(groupItemId);
+    const target = planSidebarGroupMove(sidebarListItems, groupItemId, overId, side);
     if (target === null) return;
     // The same gate `planSidebarThreadDrop` applies to a thread: only rows the
     // user may place take part, and a plan reaching any other row is no plan.
@@ -2680,17 +2712,31 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     }
     const draggedGroupKey = sidebarGroupKeyFromItemId(activeKey);
     if (draggedGroupKey !== null) {
-      // A shelf takes the whole group, thread by thread: the same thing its
-      // row's own Settle does, and what pinning each of its threads would.
+      // A shelf takes or gives back the whole group, thread by thread: the
+      // same thing its row's own Settle and Un-settle do.
       const shelf = dragState?.targetSection;
+      const shelved = dragState?.activeSection;
+      const members = groupItemMemberKeys(activeKey);
       if (shelf === "settled" || shelf === "pinned") {
-        const members = groupMemberKeysOf(draggedGroupKey);
+        if (shelf === shelved) {
+          moveGroup(
+            activeKey,
+            event.over === null ? null : String(event.over.id),
+            dragState?.insertAnchor?.side,
+          );
+          return;
+        }
         if (shelf === "settled") settleThreads(members);
         else pinThreads(members);
         return;
       }
+      if (shelved === "settled" || shelved === "pinned") {
+        if (shelved === "settled") unsettleThreads(members);
+        else unpinThreads(members);
+        return;
+      }
       moveGroup(
-        draggedGroupKey,
+        activeKey,
         event.over === null ? null : String(event.over.id),
         dragState?.insertAnchor?.side,
       );
@@ -2919,7 +2965,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   ) => {
     const coSnoozingKeys = new Set(threadKeys);
     for (const threadKey of threadKeys) {
-      const thread = threadByKeyRef.current.get(threadKey);
+      // By any key, like its siblings: the rows a fold hides are the whole of
+      // what a folded group's own Snooze is asked to reach.
+      const thread = threadByAnyKey.get(threadKey);
       if (!thread) continue;
       attemptSnooze(scopeThreadRef(thread.environmentId, thread.id), preset, { coSnoozingKeys });
     }
@@ -4025,7 +4073,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 onDragMove={handleThreadDragOver}
                 onDragEnd={handleThreadDragEnd}
               >
-                <SortableContext items={sortableIds} strategy={sidebarSortingStrategy}>
+                <SortableContext items={sortableIds} strategy={sidebarRowsStayPut}>
                   <ul
                     {...SIDEBAR_TREE_PROPS}
                     ref={attachTreeRef}
@@ -4059,8 +4107,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           : isCard
                             ? "card"
                             : "slim";
-                        // Both are primitives, so a row that is not in a
-                        // group keeps a stable undefined and its memo survives
+                        // Both primitives, so a row that is not in a group
+                        // keeps a stable undefined and its memo survives
                         // streamed events.
                         const groupEntry = groupEntryByThreadKey.get(threadKey);
                         return (
@@ -4075,7 +4123,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               optimisticDrop !== null
                             }
                             thread={thread}
-                            inGroup={groupEntry !== undefined}
+                            groupName={groupEntry?.group.name}
                             isGroupEnd={groupEntry?.isGroupEnd}
                             variant={rowVariant}
                             navigationParent={
@@ -4253,44 +4301,61 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           continue;
                         }
                         if (item.kind === "group") {
-                          const group = groupByKey.get(item.groupKey);
+                          const group = groupByKey.get(groupShelfKey(item.groupKey, item.section));
                           if (group !== undefined) {
-                            const groupId = sidebarGroupItemId(group.key);
-                            owed.push({ id: groupId, side: "above" });
+                            const groupId = sidebarGroupItemId(group.key, item.section);
+                            const slotted = sortable(item.section);
+                            if (slotted) owed.push({ id: groupId, side: "above" });
                             const carried = groupId === dragState?.activeKey;
                             items.push(
-                              carried ? null : layZone(),
+                              carried || !slotted ? null : layZone(),
                               <SidebarGroupHeader
-                                key={`group:${item.groupKey}`}
+                                key={`group:${item.section}:${item.groupKey}`}
+                                itemId={groupId}
                                 groupKey={group.key}
                                 name={group.name}
                                 size={group.size}
                                 expanded={!group.collapsed}
-                                members={groupMembersByKey.get(group.key) ?? EMPTY_GROUP_MEMBERS}
-                                onToggle={toggleGroup}
+                                members={
+                                  groupMembersByKey.get(groupShelfKey(group.key, item.section)) ??
+                                  EMPTY_GROUP_MEMBERS
+                                }
+                                onToggle={(key) =>
+                                  toggleGroup(
+                                    item.section === "pinned" || item.section === "settled"
+                                      ? `${item.section}:${key}`
+                                      : key,
+                                  )
+                                }
                                 renaming={renamingGroupKey === group.key}
                                 onCommitRename={handleCommitGroupRename}
                                 onCancelRename={handleCancelGroupRename}
                                 onContextMenu={handleGroupContextMenu}
                                 onSettleThreads={settleThreads}
+                                onUnsettleThreads={unsettleThreads}
                                 onSnoozeThreads={snoozeThreads}
                                 timestampFormat={timestampFormat}
-                                // With the Working shelf on, the inbox is
-                                // ordered by return time and a hand-placed row
-                                // is ignored, so there is nothing to drag for.
+                                // With the Working shelf on the inbox ignores hand
+                                // placement, so nothing to drag for. Elsewhere the
+                                // gesture is the shelf's: dragging out of Pinned
+                                // unpins the group, out of Settled un-settles it.
                                 draggable={
-                                  !workingShelfEnabled &&
-                                  (groupMembersByKey.get(group.key) ?? []).every((member) =>
-                                    activeReorderableThreadKeys.has(member.key),
-                                  )
+                                  item.section === "pinned" || item.section === "settled"
+                                    ? true
+                                    : !workingShelfEnabled &&
+                                      (
+                                        groupMembersByKey.get(
+                                          groupShelfKey(group.key, item.section),
+                                        ) ?? []
+                                      ).every((member) =>
+                                        activeReorderableThreadKeys.has(member.key),
+                                      )
                                 }
-                                isJoinTarget={
-                                  dragState?.joinTargetId === sidebarGroupItemId(group.key)
-                                }
+                                isJoinTarget={dragState?.joinTargetId === groupId}
                               />,
                             );
-                            owed.push({ id: groupId, side: "below" });
-                            if (endsRun) items.push(layZone());
+                            if (slotted) owed.push({ id: groupId, side: "below" });
+                            if (endsRun && slotted) items.push(layZone());
                           }
                           continue;
                         }
