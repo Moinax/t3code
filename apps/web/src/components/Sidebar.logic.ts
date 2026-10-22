@@ -265,53 +265,63 @@ export function isGroupJoinHover(input: {
   return Math.abs(activeCenter - overCenter) <= (overHeight * band) / 2;
 }
 
+/**
+ * The shelf a release against this row would land on.
+ *
+ * `resolveSidebarDropTarget` answers this for a thread, as part of planning
+ * its move; a group's row has no move to plan when it leaves the inbox, and
+ * still has to know which shelf it was dropped on.
+ */
+export function sidebarSectionAtSlot(
+  items: readonly SidebarListItem[],
+  overId: string,
+  side?: "above" | "below",
+): SidebarSection | null {
+  const index = items.findIndex((item) => sidebarListItemId(item) === overId);
+  if (index === -1) return null;
+  return sectionAtSidebarSlot(items, side === "below" ? index + 1 : index);
+}
+
+/**
+ * The group a release in this slot puts the thread in. The rail drawn down an unfolded group
+ * decides: a gap with the group on both sides is inside, the gap after its last row is not, and
+ * the group's own row counts as a side.
+ */
+export function groupKeyAtSidebarSlot(
+  items: readonly SidebarListItem[],
+  anchor: { readonly id: string; readonly side: "above" | "below" },
+  draggedKey: string,
+  groupKeyOfThread: (key: string) => string | null,
+): string | null {
+  const index = items.findIndex((item) => sidebarListItemId(item) === anchor.id);
+  if (index === -1) return null;
+  // The carried row still holds its slot and says nothing about where the gap
+  // is, so it is stepped over on both sides.
+  const neighbour = (start: number, step: number) => {
+    for (let at = start; at >= 0 && at < items.length; at += step) {
+      const item = items[at]!;
+      if (sidebarListItemId(item) !== draggedKey) return item;
+    }
+    return undefined;
+  };
+  const groupOf = (item: SidebarListItem | undefined) =>
+    item === undefined
+      ? null
+      : item.kind === "group"
+        ? item.groupKey
+        : item.kind === "thread"
+          ? groupKeyOfThread(item.key)
+          : null;
+  const above = anchor.side === "above" ? index - 1 : index;
+  const groupAbove = groupOf(neighbour(above, -1));
+  return groupAbove !== null && groupAbove === groupOf(neighbour(above + 1, 1)) ? groupAbove : null;
+}
+
 export type SidebarDropTarget = {
   readonly section: "pinned" | "active" | "settled";
   readonly pinnedOrder: readonly string[];
   readonly activeOrder: readonly string[];
 };
-
-/**
- * Where a thread lands, and the list that arrangement makes.
- *
- * The arrangement is what says which row the drop lands in front of, which is
- * the only honest way to draw an insertion line: it is read from the same
- * computation that performs the drop rather than guessed from the pointer.
- */
-export function planSidebarThreadMove(
-  items: readonly SidebarListItem[],
-  activeKey: string,
-  overId: string,
-  side?: "above" | "below",
-): { readonly items: readonly SidebarListItem[]; readonly target: SidebarDropTarget } | null {
-  const target = resolveSidebarDropTarget(items, activeKey, overId, side);
-  if (target === null) return null;
-  const activeIndex = items.findIndex((item) => sidebarListItemId(item) === activeKey);
-  const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
-  const moved = items.filter((_, index) => index !== activeIndex);
-  const overAt = moved.findIndex((item) => sidebarListItemId(item) === overId);
-  const at =
-    side === undefined || overAt === -1 ? overIndex : side === "above" ? overAt : overAt + 1;
-  moved.splice(at, 0, items[activeIndex]!);
-  return { items: moved, target };
-}
-
-/**
- * The row an insertion lands in front of, or `null` when it lands last in its
- * section — the line is drawn under the row before it then.
- */
-export function resolveSidebarInsertAnchor(
-  moved: readonly SidebarListItem[],
-  activeKey: string,
-): { readonly id: string; readonly side: "above" | "below" } | null {
-  const index = moved.findIndex((item) => sidebarListItemId(item) === activeKey);
-  if (index === -1) return null;
-  const next = moved[index + 1];
-  if (next !== undefined && next.kind !== "marker")
-    return { id: sidebarListItemId(next), side: "above" };
-  const previous = moved.slice(0, index).findLast((item) => item.kind !== "marker");
-  return previous === undefined ? null : { id: sidebarListItemId(previous), side: "below" };
-}
 
 export function resolveSidebarDropTarget(
   items: readonly SidebarListItem[],
@@ -375,7 +385,7 @@ export function planSidebarGroupMove(
   groupKey: string,
   overId: string,
   side?: "above" | "below",
-): { readonly items: readonly SidebarListItem[]; readonly target: SidebarDropTarget } | null {
+): SidebarDropTarget | null {
   const groupItem = items.find((item) => item.kind === "group" && item.groupKey === groupKey);
   if (groupItem?.kind !== "group") return null;
   const memberKeys = groupItem.memberKeys;
@@ -389,6 +399,9 @@ export function planSidebarGroupMove(
   const section = sectionAtSidebarSlot(moved, overIndex);
   if (section !== "active") return null;
   const memberSet = new Set(memberKeys);
+  // Which members still have a row: a fold takes them off the list without
+  // taking them out of it, and the moved group's own rows travel in `block`.
+  const onScreen = new Set(rest.flatMap((item) => (item.kind === "thread" ? [item.key] : [])));
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
@@ -402,20 +415,21 @@ export function planSidebarGroupMove(
       )
         break;
     } else if (item.kind === "group") {
-      // The moved group speaks for members a fold may have hidden; the rows of
-      // any other group are already in the list, in their own place.
-      if (item.groupKey === groupKey) {
-        for (const key of memberKeys) {
-          if (currentSection === "pinned") pinnedOrder.push(key);
-          else activeOrder.push(key);
-        }
+      // Every group speaks for the members a fold hides, not just the one
+      // being moved: a group folded further down the list has no rows either,
+      // and leaving its members out of the order is leaving the moved group
+      // with nothing to be placed against.
+      for (const key of item.groupKey === groupKey ? memberKeys : item.memberKeys) {
+        if (onScreen.has(key)) continue;
+        if (currentSection === "pinned") pinnedOrder.push(key);
+        else activeOrder.push(key);
       }
       continue;
     } else if (memberSet.has(item.key)) continue;
     else if (currentSection === "pinned") pinnedOrder.push(item.key);
     else activeOrder.push(item.key);
   }
-  return { items: moved, target: { section, pinnedOrder, activeOrder } };
+  return { section, pinnedOrder, activeOrder };
 }
 
 export function resolveSidebarGroupDropTarget(
@@ -424,7 +438,7 @@ export function resolveSidebarGroupDropTarget(
   overId: string,
   side?: "above" | "below",
 ): SidebarDropTarget | null {
-  return planSidebarGroupMove(items, groupKey, overId, side)?.target ?? null;
+  return planSidebarGroupMove(items, groupKey, overId, side);
 }
 
 export type SidebarThreadDropPlan =

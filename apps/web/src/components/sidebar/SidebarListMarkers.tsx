@@ -7,14 +7,7 @@ import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models
 import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import {
-  CheckIcon,
-  ChevronRightIcon,
-  CircleCheckIcon,
-  CircleDashedIcon,
-  LayersIcon,
-  MessageCircleQuestionIcon,
-} from "lucide-react";
+import { CheckIcon, ChevronRightIcon, LayersIcon } from "lucide-react";
 import { type ReactNode, useLayoutEffect, useState } from "react";
 import { cn } from "~/lib/utils";
 import {
@@ -27,9 +20,10 @@ import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import {
   SIDEBAR_SORTABLE_DRAG_DISABLED,
   SIDEBAR_SORTABLE_DRAG_ENABLED,
-  SidebarInsertLine,
+  SidebarDropWell,
   SidebarJoinBadge,
   SidebarProviderStack,
+  sidebarStateVisual,
   SnoozeMenuButton,
   type SidebarProviderEntry,
 } from "./SidebarThreadRow";
@@ -60,6 +54,7 @@ function SortableSidebarMarker(props: {
     <li
       ref={setNodeRef}
       data-thread-selection-safe
+      data-drag-id={sidebarMarkerId(props.marker)}
       data-testid={props["data-testid"]}
       className={cn("list-none", props.className)}
       style={{
@@ -87,14 +82,11 @@ export function SidebarSectionPlaceholder(props: {
       revealOverflow={props.marker === "settled-placeholder" && props.showHint}
     >
       {props.showHint ? (
-        <div
-          className={cn(
-            "absolute inset-x-0 top-0 flex h-9 items-center justify-center rounded-md border border-dashed border-sidebar-foreground/25 text-xs text-sidebar-foreground/80",
-            props.isDropTarget && "border-primary/40 bg-primary/5 text-primary",
-          )}
-        >
-          {props.label}
-        </div>
+        <SidebarDropWell
+          label={props.label}
+          active={props.isDropTarget}
+          className="absolute inset-x-0 top-0 h-9"
+        />
       ) : null}
     </SortableSidebarMarker>
   );
@@ -110,10 +102,15 @@ export function SidebarDragBoundary(props: {
     <SortableSidebarMarker
       marker={props.marker}
       data-testid={`sidebar-${props.marker}`}
-      className="pointer-events-none relative mx-0.5 -mb-px h-0"
+      className={cn(
+        "pointer-events-none relative mx-0.5 overflow-hidden transition-[height] duration-150 ease-out motion-reduce:transition-none",
+        // Its own band while a drag is live: hanging out of a marker of no
+        // height, the label drew over the first row of the shelf it names.
+        props.visible ? "h-5" : "h-0",
+      )}
     >
       {props.visible ? (
-        <div className="sidebar-drag-boundary-label absolute inset-x-2 top-1 flex h-4 items-center gap-2">
+        <div className="sidebar-drag-boundary-label flex h-4 items-center gap-2 px-1.5">
           <span
             className={cn(
               "shrink-0 text-xs font-medium",
@@ -135,6 +132,44 @@ export function SidebarDragBoundary(props: {
   );
 }
 
+/**
+ * A place a release would put the row, in the one language this sidebar already
+ * has for it: the dashed well the Settled shelf shows. It lives in the list
+ * rather than over it, so the rows below it make room by moving down, and the
+ * only motion a drag produces is that gap opening and closing.
+ */
+export function SidebarDropZone(props: {
+  label: string;
+  open: boolean;
+  isDropTarget?: boolean;
+  testId?: string;
+}) {
+  return (
+    <li
+      aria-hidden
+      data-testid={props.testId ?? "sidebar-drop-zone"}
+      // The rows part to make room rather than jumping apart. Only the height
+      // of this one element animates, and only when the well opens or closes.
+      className={cn(
+        "mx-0.5 list-none overflow-hidden transition-[height] duration-150 ease-out motion-reduce:transition-none",
+        // Closed, it gives back the list's own row gap too: a drag lays one of
+        // these between every pair of rows, and a pixel each is a list that
+        // lurches the moment a hand moves.
+        props.open ? "h-10" : "h-0 -mt-px",
+      )}
+    >
+      <SidebarDropWell
+        label={props.label}
+        active={props.isDropTarget !== false}
+        className={cn(
+          "h-full transition-opacity duration-150 ease-out",
+          props.open ? "opacity-100" : "opacity-0",
+        )}
+      />
+    </li>
+  );
+}
+
 /** How a hidden member shows up on a folded group's row. */
 export type SidebarGroupMember = {
   readonly key: string;
@@ -147,19 +182,6 @@ export type SidebarGroupMember = {
   readonly canSettle: boolean;
   readonly canSnooze: boolean;
 };
-
-// The icon and colour a thread's own row gives each of these states, so a
-// folded group reads in the same vocabulary as the rows it replaces.
-const groupStateTone = {
-  done: "text-success",
-  working: "text-info",
-  attention: "text-indigo-600 dark:text-indigo-300",
-} as const satisfies Record<ThreadGroupTone, string>;
-const groupStateIcon = {
-  done: CircleCheckIcon,
-  working: CircleDashedIcon,
-  attention: MessageCircleQuestionIcon,
-} as const satisfies Record<ThreadGroupTone, typeof CircleCheckIcon>;
 
 /**
  * One member per agent, in the order they appear.
@@ -199,7 +221,9 @@ function SidebarFoldedGroupRow(props: {
 }) {
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const state = groupStateLabel(props.members.map((member) => member.tone));
-  const StateIcon = groupStateIcon[state.tone];
+  // A folded group reports in the vocabulary of the rows it stands in for, and
+  // a group wanting attention is a thread asking for input.
+  const stateVisual = sidebarStateVisual[state.tone === "attention" ? "input" : state.tone];
   const title = titleWithoutGroupPrefix(props.members[0]?.title ?? props.name);
   const memberKeys = props.members.map((member) => member.key);
   // Settle takes whoever is left to settle; snooze is all or nothing, as it is
@@ -241,10 +265,10 @@ function SidebarFoldedGroupRow(props: {
           <span
             className={cn(
               "inline-flex items-center gap-1 font-medium transition-opacity group-hover/folded-group:opacity-0",
-              groupStateTone[state.tone],
+              stateVisual.className,
             )}
           >
-            <StateIcon aria-hidden className="size-4 shrink-0" />
+            <stateVisual.Icon aria-hidden className="size-4 shrink-0" />
             <span role="status">{state.label}</span>
           </span>
           <span
@@ -346,7 +370,6 @@ export function SidebarGroupHeader(props: {
   ) => void;
   timestampFormat?: TimestampFormat;
   draggable?: boolean;
-  insertLine?: "above" | "below" | undefined;
 }) {
   // The group's row is its handle: picking it up moves the whole block, the
   // way picking up a thread moves that thread.
@@ -361,6 +384,7 @@ export function SidebarGroupHeader(props: {
       ref={setNodeRef}
       {...(props.draggable === true ? listeners : {})}
       data-thread-selection-safe
+      data-drag-id={sidebarGroupItemId(props.groupKey)}
       data-testid="sidebar-group-header"
       className={cn(
         "mx-0.5 list-none rounded-md",
@@ -368,7 +392,12 @@ export function SidebarGroupHeader(props: {
         // own height rather than a separator's.
         props.expanded || props.renaming === true ? "h-8" : "py-0.5",
         props.isJoinTarget === true && "ring-2 ring-inset ring-primary",
-        isDragging && "z-20 opacity-25",
+        // Carried the way a thread's card is, and outlined for the same
+        // reason; its slot gives up its height so the only gap on screen is
+        // the one it would land in. The surface goes on the card rather than
+        // here: a slot of no height paints no background to be read against.
+        isDragging &&
+          "z-20 h-0 py-0 [&>*]:rounded-md [&>*]:bg-sidebar-row-active [&>*]:shadow-lg [&>*]:ring-1 [&>*]:ring-primary/40",
         "relative",
       )}
       style={{ transform: CSS.Translate.toString(transform), transition }}
@@ -378,7 +407,6 @@ export function SidebarGroupHeader(props: {
         props.onContextMenu(props.groupKey, { x: event.clientX, y: event.clientY });
       }}
     >
-      <SidebarInsertLine side={props.insertLine} />
       {props.isJoinTarget === true ? <SidebarJoinBadge label="Add to group" /> : null}
       {props.renaming === true ? (
         <input
