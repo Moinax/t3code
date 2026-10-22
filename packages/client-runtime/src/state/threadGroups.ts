@@ -171,10 +171,13 @@ export function layoutThreadGroups<T>(input: {
   readonly sections: ReadonlyArray<readonly T[]>;
   readonly groupKeyOf: (thread: T) => string | null;
   readonly nameOf?: (key: string) => string;
-  readonly collapsed: ReadonlySet<string>;
+  /** A set of folded keys, or the question asked per group. */
+  readonly collapsed: ReadonlySet<string> | ((key: string) => boolean);
   readonly keepThread?: (thread: T) => boolean;
 }): ReadonlyArray<ReadonlyArray<ThreadGroupEntry<T>>> {
   const { sections, groupKeyOf, nameOf, collapsed, keepThread } = input;
+  const isCollapsed =
+    typeof collapsed === "function" ? collapsed : (key: string) => collapsed.has(key);
   const grouped = sections.map((section) => groupThreads(section, groupKeyOf));
   const sizes = new Map<string, number>();
   for (const groups of grouped) {
@@ -186,7 +189,7 @@ export function layoutThreadGroups<T>(input: {
     const size = sizes.get(key) ?? 0;
     // A thread alone on its key is just a thread.
     if (size < 2) return null;
-    return { key, name: nameOf?.(key) ?? key, size, collapsed: collapsed.has(key) };
+    return { key, name: nameOf?.(key) ?? key, size, collapsed: isCollapsed(key) };
   };
   return sections.map((section) => {
     const entries: ThreadGroupEntry<T>[] = [];
@@ -430,6 +433,10 @@ export function addToManualGroup(
   key: string,
   threadKey: string,
 ): readonly ManualThreadGroup[] {
+  // Already there: the removal below would take the group to one member and
+  // dissolve it, so adding a member it has would delete the group instead.
+  const target = manualGroups.find((group) => manualGroupKey(group.id) === key);
+  if (target?.members.includes(threadKey) === true) return manualGroups;
   return removeFromManualGroups(manualGroups, [threadKey]).map((group) =>
     manualGroupKey(group.id) === key ? { ...group, members: [...group.members, threadKey] } : group,
   );

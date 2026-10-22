@@ -7,12 +7,11 @@ import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models
 import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { CheckIcon, ChevronRightIcon, LayersIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, LayersIcon, PinIcon, Undo2Icon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { cn } from "~/lib/utils";
 import {
   animateSidebarLayoutChanges,
-  sidebarGroupItemId,
   sidebarMarkerId,
   type SidebarListMarker,
 } from "../Sidebar.logic";
@@ -169,6 +168,9 @@ export type SidebarGroupMember = {
   /** Resolved per member: a group can hold threads from several environments. */
   readonly providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
   readonly canSettle: boolean;
+  /** Put away already: the group's row offers the way back, for all of them. */
+  readonly isSettled: boolean;
+  readonly isPinned: boolean;
   readonly canSnooze: boolean;
 };
 
@@ -205,6 +207,7 @@ function SidebarFoldedGroupRow(props: {
   members: readonly SidebarGroupMember[];
   onToggle: (groupKey: string) => void;
   onSettleThreads?: (threadKeys: readonly string[]) => void;
+  onUnsettleThreads?: (threadKeys: readonly string[]) => void;
   onSnoozeThreads?: (
     threadKeys: readonly string[],
     preset: Pick<SnoozePreset, "snoozedUntil">,
@@ -221,6 +224,16 @@ function SidebarFoldedGroupRow(props: {
   // Settle takes whoever is left to settle; snooze is all or nothing, as it is
   // for a multiple selection — a half-snoozed group would hide no row.
   const settleKeys = props.members.filter((member) => member.canSettle).map((member) => member.key);
+  // All of them or none: a half-unsettled group would leave rows on two
+  // shelves, which is the thing this row exists to prevent.
+  // A pinned group says so where a pinned thread does, and an unpin from here
+  // would take the whole group, so the row shows the state and leaves the
+  // undoing to the gesture that put it there.
+  const pinned = props.members.length > 0 && props.members.every((member) => member.isPinned);
+  const unsettleKeys =
+    props.members.length > 0 && props.members.every((member) => member.isSettled)
+      ? props.members.map((member) => member.key)
+      : [];
   const canSnoozeGroup =
     props.members.length > 0 && props.members.every((member) => member.canSnooze);
   return (
@@ -240,6 +253,9 @@ function SidebarFoldedGroupRow(props: {
       className="group/folded-group relative block h-[4.875rem] w-full cursor-pointer overflow-hidden rounded-md px-(--sidebar-row-content-inset) py-(--sidebar-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
       <span className="flex h-5 min-w-0 items-center gap-1.5 text-xs">
+        {pinned ? (
+          <PinIcon aria-label="Pinned" className="size-3 shrink-0 text-muted-foreground/65" />
+        ) : null}
         <span className="flex shrink-0 items-center gap-0.5">
           {props.members.map((member) =>
             member.project ? (
@@ -269,6 +285,26 @@ function SidebarFoldedGroupRow(props: {
               snoozeMenuOpen && "opacity-100",
             )}
           >
+            {unsettleKeys.length > 0 && props.onUnsettleThreads ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={`Un-settle ${unsettleKeys.length} threads`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        props.onUnsettleThreads?.(unsettleKeys);
+                      }}
+                      className="inline-flex cursor-pointer items-center gap-0.5 rounded-md px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      <Undo2Icon className="size-3.5" />
+                    </button>
+                  }
+                />
+                <TooltipPopup side="top">{`Un-settle ${unsettleKeys.length} threads`}</TooltipPopup>
+              </Tooltip>
+            ) : null}
             {settleKeys.length > 0 && props.onSettleThreads ? (
               <Tooltip>
                 <TooltipTrigger
@@ -330,6 +366,8 @@ function SidebarFoldedGroupRow(props: {
  */
 export function SidebarGroupHeader(props: {
   groupKey: string;
+  /** This row's own id: the same group may have one on another shelf. */
+  itemId: string;
   name: string;
   size: number;
   expanded: boolean;
@@ -341,6 +379,7 @@ export function SidebarGroupHeader(props: {
   onContextMenu?: (groupKey: string, position: { x: number; y: number }) => void;
   isJoinTarget?: boolean;
   onSettleThreads?: (threadKeys: readonly string[]) => void;
+  onUnsettleThreads?: (threadKeys: readonly string[]) => void;
   onSnoozeThreads?: (
     threadKeys: readonly string[],
     preset: Pick<SnoozePreset, "snoozedUntil">,
@@ -351,7 +390,7 @@ export function SidebarGroupHeader(props: {
   // The group's row is its handle: picking it up moves the whole block, the
   // way picking up a thread moves that thread.
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: sidebarGroupItemId(props.groupKey),
+    id: props.itemId,
     animateLayoutChanges: animateSidebarLayoutChanges,
     disabled:
       props.draggable === true ? SIDEBAR_SORTABLE_DRAG_ENABLED : SIDEBAR_SORTABLE_DRAG_DISABLED,
@@ -361,7 +400,7 @@ export function SidebarGroupHeader(props: {
       ref={setNodeRef}
       {...(props.draggable === true ? listeners : {})}
       data-thread-selection-safe
-      data-drag-id={sidebarGroupItemId(props.groupKey)}
+      data-drag-id={props.itemId}
       data-testid="sidebar-group-header"
       className={cn(
         "mx-0.5 list-none rounded-md",

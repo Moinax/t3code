@@ -72,7 +72,10 @@ import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
-import { titleWithoutGroupPrefix } from "@t3tools/client-runtime/state/thread-groups";
+import {
+  ticketGroupKeyOf,
+  titleWithoutGroupPrefix,
+} from "@t3tools/client-runtime/state/thread-groups";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
   animateSidebarLayoutChanges,
@@ -452,13 +455,6 @@ export const sidebarStateVisual = {
 export const SIDEBAR_SORTABLE_DRAG_DISABLED = { draggable: true } as const;
 export const SIDEBAR_SORTABLE_DRAG_ENABLED = { draggable: false } as const;
 
-// Takes the row's props rather than a render function: a closure from the
-// sidebar body is new on every sidebar render, which rebuilt the bag and
-// re-rendered every memoized row with it.
-/**
- * What a release in the middle of a row would do, said on the row itself — the
- * same dashed well the shelves use, laid over the card it would absorb.
- */
 /**
  * The dashed well shown wherever a release would land, in one place so every
  * drop this sidebar accepts is drawn in the Settled shelf's language.
@@ -505,6 +501,9 @@ export function SidebarJoinBadge({ label }: { label: string }) {
   );
 }
 
+// Takes the row's props rather than a render function: a closure from the
+// sidebar body is new on every sidebar render, which rebuilt the bag and
+// re-rendered every memoized row with it.
 export function SortableThreadRow(
   props: Omit<SidebarThreadRowProps, "sortable"> & {
     sortableId: string;
@@ -625,8 +624,12 @@ type SidebarThreadRowProps = {
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   onFileDropThreads?: ((threadRef: ScopedThreadRef, files: File[]) => void) | undefined;
-  /** This row is a member of a group, so it carries the group's rail. */
-  inGroup?: boolean | undefined;
+  /**
+   * The name of the group this row belongs to, which is also what says it is
+   * in one: the rail follows it, and the title drops the prefix only when the
+   * group's row is the one saying it.
+   */
+  groupName?: string | undefined;
   /** Last member of its group in this section: the rail ends here. */
   isGroupEnd?: boolean | undefined;
   /** A drag is hovering this row's middle, so releasing would group into it. */
@@ -1041,7 +1044,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         )}
         dir={textDirection(thread.title)}
       >
-        {props.inGroup === true ? titleWithoutGroupPrefix(thread.title) : thread.title}
+        {/* Only the prefix the group's row already says. A hand-made group
+            holds whatever threads were put in it, and stripping each one's own
+            ticket there would leave two unrelated rows reading alike. */}
+        {props.groupName !== undefined && ticketGroupKeyOf(thread.title) === props.groupName
+          ? titleWithoutGroupPrefix(thread.title)
+          : thread.title}
       </span>
     );
   const accessibleTitle = isRenaming ? null : <span className="sr-only">{thread.title}</span>;
@@ -1300,9 +1308,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         // The rail sits in the card's own left padding, so grouping a thread
         // costs no width. On the li rather than the card, it closes the gap
         // between two members instead of restarting at each one.
-        props.inGroup === true &&
+        props.groupName !== undefined &&
           "relative before:absolute before:inset-y-0 before:left-1 before:z-20 before:w-0.5 before:bg-primary/70 before:content-['']",
-        props.inGroup === true && props.isGroupEnd === true && "before:bottom-3 before:rounded-b",
+        props.groupName !== undefined &&
+          props.isGroupEnd === true &&
+          "before:bottom-3 before:rounded-b",
       )}
     >
       {props.isJoinTarget === true ? <SidebarJoinBadge label="Group" /> : null}
