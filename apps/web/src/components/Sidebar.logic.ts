@@ -201,12 +201,22 @@ export function sidebarMarkerId(marker: SidebarListMarker): string {
 
 const SIDEBAR_GROUP_PREFIX = "sidebar-group-";
 
-export function sidebarGroupItemId(groupKey: string): string {
-  return `${SIDEBAR_GROUP_PREFIX}${groupKey}`;
+/**
+ * The id of a group's row on one shelf.
+ *
+ * A ticket keeps its row wherever its threads are, so the same group can have
+ * a row in the inbox and another in Settled. The shelf is part of the id, or
+ * the two rows would be one droppable in two places.
+ */
+export function sidebarGroupItemId(groupKey: string, section: SidebarSection = "active"): string {
+  return `${SIDEBAR_GROUP_PREFIX}${section}:${groupKey}`;
 }
 
 export function sidebarGroupKeyFromItemId(itemId: string): string | null {
-  return itemId.startsWith(SIDEBAR_GROUP_PREFIX) ? itemId.slice(SIDEBAR_GROUP_PREFIX.length) : null;
+  if (!itemId.startsWith(SIDEBAR_GROUP_PREFIX)) return null;
+  const rest = itemId.slice(SIDEBAR_GROUP_PREFIX.length);
+  const shelf = rest.indexOf(":");
+  return shelf === -1 ? rest : rest.slice(shelf + 1);
 }
 
 export type SidebarListItem =
@@ -225,7 +235,7 @@ export type SidebarListItem =
 
 export function sidebarListItemId(item: SidebarListItem): string {
   if (item.kind === "thread") return item.key;
-  if (item.kind === "group") return sidebarGroupItemId(item.groupKey);
+  if (item.kind === "group") return sidebarGroupItemId(item.groupKey, item.section);
   return sidebarMarkerId(item.marker);
 }
 
@@ -382,14 +392,19 @@ export function resolveSidebarDropTarget(
  */
 export function planSidebarGroupMove(
   items: readonly SidebarListItem[],
-  groupKey: string,
+  /**
+   * The row's own id, not its group's key: a group keeps a row on every shelf
+   * its threads reach, and each one speaks for the threads on that shelf
+   * alone. By key, dragging the inbox's row would move the pinned block.
+   */
+  groupItemId: string,
   overId: string,
   side?: "above" | "below",
 ): SidebarDropTarget | null {
-  const groupItem = items.find((item) => item.kind === "group" && item.groupKey === groupKey);
+  const groupItem = items.find((item) => sidebarListItemId(item) === groupItemId);
   if (groupItem?.kind !== "group") return null;
   const memberKeys = groupItem.memberKeys;
-  const moving = new Set<string>([sidebarGroupItemId(groupKey), ...memberKeys]);
+  const moving = new Set<string>([sidebarListItemId(groupItem), ...memberKeys]);
   const block = items.filter((item) => moving.has(sidebarListItemId(item)));
   const rest = items.filter((item) => !moving.has(sidebarListItemId(item)));
   const overAt = rest.findIndex((item) => sidebarListItemId(item) === overId);
@@ -419,7 +434,7 @@ export function planSidebarGroupMove(
       // being moved: a group folded further down the list has no rows either,
       // and leaving its members out of the order is leaving the moved group
       // with nothing to be placed against.
-      for (const key of item.groupKey === groupKey ? memberKeys : item.memberKeys) {
+      for (const key of sidebarListItemId(item) === groupItemId ? memberKeys : item.memberKeys) {
         if (onScreen.has(key)) continue;
         if (currentSection === "pinned") pinnedOrder.push(key);
         else activeOrder.push(key);
@@ -430,15 +445,6 @@ export function planSidebarGroupMove(
     else activeOrder.push(item.key);
   }
   return { section, pinnedOrder, activeOrder };
-}
-
-export function resolveSidebarGroupDropTarget(
-  items: readonly SidebarListItem[],
-  groupKey: string,
-  overId: string,
-  side?: "above" | "below",
-): SidebarDropTarget | null {
-  return planSidebarGroupMove(items, groupKey, overId, side);
 }
 
 export type SidebarThreadDropPlan =

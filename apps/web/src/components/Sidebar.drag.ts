@@ -10,6 +10,12 @@ import {
 } from "./Sidebar.logic";
 
 const stationary = { x: 0, y: 0, scaleX: 1, scaleY: 1 };
+/**
+ * A list whose rows never move. The only motion a drag produces is the drop
+ * zone opening in place, so the rows have nothing to project — and a strategy
+ * that is one constant keeps `SortableContext` and every row memoized.
+ */
+export const sidebarRowsStayPut: SortingStrategy = () => stationary;
 const hidden = { ...stationary, scaleY: 0 };
 type ThreadItem = Extract<SidebarListItem, { kind: "thread" }>;
 type Layout = Parameters<SortingStrategy>[0];
@@ -133,7 +139,13 @@ export function createSidebarCollisionDetection(
     const id = String(nearest.id);
     const valid = validity.get(id) ?? isValidTarget(id);
     validity.set(id, valid);
-    return valid ? collisions : collisions.filter((collision) => collision.id === args.active.id);
+    if (valid) return collisions;
+    // Nothing to land on here, but the gesture still has to be told it is over
+    // its own row: dnd-kit only moves the card it is carrying while an `over`
+    // stands, and the card in the hand is not among the candidates above.
+    return args.droppableContainers.some((container) => container.id === args.active.id)
+      ? [{ id: args.active.id, data: { value: 0, under: false } }]
+      : [];
   };
 }
 
