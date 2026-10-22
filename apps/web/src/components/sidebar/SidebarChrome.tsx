@@ -193,10 +193,10 @@ function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
           {summary.badge && (
             <span
               className={cn(
-                // Dark on the tone, not the tone's text colour: `--warning-foreground`
+                // `text-tone-foreground`, not `text-warning-foreground`: the latter
                 // is amber *text* for a plain surface, which on an amber disc is
                 // the same colour twice and leaves the count unreadable.
-                "absolute -right-1 -top-1 min-w-4 rounded-full px-1 text-center text-3xs font-semibold leading-4 tabular-nums text-zinc-950 ring-2 ring-sidebar-control-surface",
+                "absolute -right-1 -top-1 min-w-4 rounded-full px-1 text-center text-3xs font-semibold leading-4 tabular-nums text-tone-foreground ring-2 ring-sidebar-control-surface",
                 summary.tone === "success" ? "bg-success" : "bg-warning",
               )}
             >
