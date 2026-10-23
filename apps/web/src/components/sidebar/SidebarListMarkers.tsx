@@ -204,6 +204,7 @@ function SidebarFoldedGroupRow(props: {
   groupKey: string;
   name: string;
   size: number;
+  isActive?: boolean;
   members: readonly SidebarGroupMember[];
   onToggle: (groupKey: string) => void;
   onSettleThreads?: (threadKeys: readonly string[]) => void;
@@ -244,13 +245,19 @@ function SidebarFoldedGroupRow(props: {
       tabIndex={0}
       data-testid="sidebar-group-folded"
       aria-label={`Unfold ${props.name}, ${props.size} threads`}
+      // The row the open thread would have had is folded away, so this one
+      // answers for it: lit like that row, and the one the reveal scrolls to.
+      aria-current={props.isActive === true ? "page" : undefined}
       onClick={() => props.onToggle(props.groupKey)}
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         props.onToggle(props.groupKey);
       }}
-      className="group/folded-group relative block h-[4.875rem] w-full cursor-pointer overflow-hidden rounded-md px-(--sidebar-row-content-inset) py-(--sidebar-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      className={cn(
+        "group/folded-group relative block h-[4.875rem] w-full cursor-pointer overflow-hidden rounded-md px-(--sidebar-row-content-inset) py-(--sidebar-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        props.isActive === true && "bg-sidebar-row-active text-sidebar-foreground",
+      )}
     >
       <span className="flex h-5 min-w-0 items-center gap-1.5 text-xs">
         {pinned ? (
@@ -378,6 +385,8 @@ export function SidebarGroupHeader(props: {
   onCancelRename?: () => void;
   onContextMenu?: (groupKey: string, position: { x: number; y: number }) => void;
   isJoinTarget?: boolean;
+  /** The open thread is one of the folded members, so this row stands in for it. */
+  isActive?: boolean;
   onSettleThreads?: (threadKeys: readonly string[]) => void;
   onUnsettleThreads?: (threadKeys: readonly string[]) => void;
   onSnoozeThreads?: (

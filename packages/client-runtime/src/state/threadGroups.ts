@@ -161,8 +161,8 @@ export function clusterThreadsByGroup<T>(
 /**
  * Turn sorted sections into rows: a group's row followed by its members, and
  * ungrouped threads on their own. A folded group keeps its row and drops its
- * members, except the one the user has open — the way a collapsed shelf keeps
- * the open thread on screen.
+ * members, except the one the user has open — kept as an entry so it holds its
+ * place in the order. Whether that entry earns a row is the caller's call.
  *
  * Sizes count every live section, so a group reads as the same size wherever
  * its row appears.

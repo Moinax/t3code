@@ -548,6 +548,9 @@ function useSidebarThreads(input: {
       groupKeyOf,
       nameOf: groupNameOf,
       collapsed,
+      // Kept as an entry, not as a row: a fold takes the open thread with the
+      // rest of its group — its row would repeat the title the group's own row
+      // already carries — but traversal still has to have somewhere to start.
       keepThread: (thread) => threadShellKey(thread) === routeRowThreadKey,
     });
   // A shelf holds what has been put away, so a group keeps to one row there
@@ -1999,21 +2002,29 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       entries: readonly ThreadGroupEntry<EnvironmentThreadShell>[],
       section: SidebarSection,
     ): SidebarListItem[] =>
-      entries.map((entry) =>
+      entries.flatMap((entry): SidebarListItem[] =>
         entry.kind === "group"
-          ? {
-              kind: "group",
-              groupKey: entry.group.key,
-              section,
-              memberKeys: (
-                groupMembersByKey.get(groupShelfKey(entry.group.key, section)) ?? []
-              ).map((member) => member.key),
-            }
-          : {
-              kind: "thread",
-              key: scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)),
-              section,
-            },
+          ? [
+              {
+                kind: "group",
+                groupKey: entry.group.key,
+                section,
+                memberKeys: (
+                  groupMembersByKey.get(groupShelfKey(entry.group.key, section)) ?? []
+                ).map((member) => member.key),
+              } as const,
+            ]
+          : // The open thread a fold kept holds its place in the order without
+            // taking a row: the group's own row stands in for it.
+            entry.group?.collapsed === true
+            ? []
+            : [
+                {
+                  kind: "thread",
+                  key: scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)),
+                  section,
+                } as const,
+              ],
       );
     if (
       pinnedThreads.length +
@@ -3990,6 +4001,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                       )
                                 }
                                 isJoinTarget={dragState?.joinTargetId === groupId}
+                                // Folded over the open thread, so this row is
+                                // the one standing in for it.
+                                isActive={
+                                  routeRowThreadKey !== null &&
+                                  groupEntryByThreadKey.get(routeRowThreadKey)?.group.key ===
+                                    group.key &&
+                                  sectionByThreadKey.get(routeRowThreadKey) === item.section
+                                }
                               />,
                             );
                             if (slotted) owed.push({ id: groupId, side: "below" });
