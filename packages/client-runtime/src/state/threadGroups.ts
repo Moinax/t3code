@@ -135,13 +135,9 @@ export function clusterThreadsByGroup<T>(
 }
 
 /**
- * Turn sorted sections into rows: a group's row followed by its members, and
- * ungrouped threads on their own. A folded group keeps its row and drops its
- * members, except the one the user has open — the way a collapsed shelf keeps
- * the open thread on screen.
- *
- * Sizes count every live section, so a group reads as the same size wherever
- * its row appears.
+ * Turn sorted sections into rows: a group's row then its members, ungrouped threads alone. A
+ * folded group drops its members except the open one, kept as an entry to hold its place; the
+ * caller decides if it earns a row. Sizes count every live section, so they match everywhere.
  */
 export function layoutThreadGroups<T>(input: {
   readonly sections: ReadonlyArray<readonly T[]>;

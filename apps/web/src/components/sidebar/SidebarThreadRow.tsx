@@ -83,6 +83,7 @@ import { useSidebarLinkedIssueState } from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { formatRelativeTime, parseTimestampDate } from "../../timestampFormat";
+import { threadTimeTimestamp } from "./threadTime.logic";
 import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
@@ -160,7 +161,7 @@ function compactSidebarTimeLabel(timestamp: string, nowMs: number, resolve: Mess
 
 // Subscribes to the minute tick itself, so only the label re-renders each
 // minute. The minute is passed as the clock so it is the formatter's input.
-function RelativeTimeLabel(props: { timestamp: string | null }) {
+export function RelativeTimeLabel(props: { timestamp: string | null }) {
   const nowMinute = useNowMinute();
   const m = useMessages();
   return props.timestamp === null
