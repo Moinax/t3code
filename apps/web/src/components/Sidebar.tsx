@@ -553,7 +553,7 @@ function useSidebarThreads(input: {
   // A shelf holds what has been put away, so a group keeps to one row there
   // until it is opened on that shelf: `collapsedGroups` names the inbox's
   // folds, and a shelf's entries name its unfolds instead.
-  const shelfFold = (section: "pinned" | "settled") => (key: string) =>
+  const shelfFold = (section: "pinned" | "settled" | "snoozed") => (key: string) =>
     !collapsedGroups.includes(`${section}:${key}`);
   // One pass per shelf, so a group's row only appears where two of its threads
   // actually are: a lone member of a ticket is just a thread.
@@ -563,12 +563,14 @@ function useSidebarThreads(input: {
   );
   const [pinnedEntries = []] = layoutOf([pinnedThreads], shelfFold("pinned"));
   const [settledEntries = []] = layoutOf([renderedSettledRows], shelfFold("settled"));
+  const [snoozedEntries = []] = layoutOf([visibleSnoozedThreads], shelfFold("snoozed"));
   const threadsOf = (entries: readonly ThreadGroupEntry<EnvironmentThreadShell>[]) =>
     entries.flatMap((entry) => (entry.kind === "thread" ? [entry.thread] : []));
   const renderedActiveThreads = threadsOf(activeEntries);
   const renderedWorkingThreads = threadsOf(workingEntries);
   const renderedPinnedThreads = threadsOf(pinnedEntries);
   const renderedSettledThreads = threadsOf(settledEntries);
+  const renderedSnoozedThreads = threadsOf(snoozedEntries);
   // Both names a fold can go under: the inbox folds by group, a shelf unfolds
   // by group *and* shelf, and the prune must keep whichever is on screen.
   const liveGroupKeys = new Set([
@@ -581,6 +583,9 @@ function useSidebarThreads(input: {
     ...settledEntries.flatMap((entry) =>
       entry.kind === "group" ? [`settled:${entry.group.key}`] : [],
     ),
+    ...snoozedEntries.flatMap((entry) =>
+      entry.kind === "group" ? [`snoozed:${entry.group.key}`] : [],
+    ),
   ]);
   // Rows a fold hides are off screen, so they stay out of the ordered list the
   // same way a collapsed shelf's rows do: range selection, action sweeps, jump
@@ -592,14 +597,14 @@ function useSidebarThreads(input: {
   const foldableGroupKeys = new Set(
     threads.flatMap((thread) => {
       const key = groupKeyOf(thread);
-      return key === null ? [] : [key, `pinned:${key}`, `settled:${key}`];
+      return key === null ? [] : [key, `pinned:${key}`, `settled:${key}`, `snoozed:${key}`];
     }),
   );
   const orderedThreads = [
     ...renderedPinnedThreads,
     ...renderedActiveThreads,
     ...renderedWorkingThreads,
-    ...visibleSnoozedThreads,
+    ...renderedSnoozedThreads,
     ...renderedSettledThreads,
   ];
   const sectionByThreadKey = new Map<string, SidebarSection>();
@@ -637,12 +642,12 @@ function useSidebarThreads(input: {
     workingShelfExpanded,
     toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
     renderedSettledThreads,
-    visibleSnoozedThreads,
     visibleWorkingThreads,
     pinnedEntries,
     activeEntries,
     workingEntries,
     settledEntries,
+    snoozedEntries,
     manualGroups,
     setManualGroups,
     setUngroupedThreads,
@@ -1272,11 +1277,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleSnoozedShelf,
     workingShelfExpanded,
     toggleWorkingShelf,
-    visibleSnoozedThreads,
     pinnedEntries,
     activeEntries,
     workingEntries,
     settledEntries,
+    snoozedEntries,
     manualGroups,
     setManualGroups,
     setUngroupedThreads,
@@ -1939,6 +1944,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     [activeEntries, "active"],
     [workingEntries, "working"],
     [settledEntries, "settled"],
+    [snoozedEntries, "snoozed"],
   ] as const) {
     for (const entry of entries) {
       if (entry.kind === "group") {
@@ -1955,6 +1961,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     [activeThreads, "active"],
     [workingThreads, "working"],
     [settledThreads, "settled"],
+    [snoozedThreads, "snoozed"],
   ] as const)
     for (const thread of threads) {
       const plainKey = groupKeyOf(thread);
@@ -1986,14 +1993,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       groupMembersByKey.set(groupKey, members);
     }
   const sidebarListItemsFresh = ((): readonly SidebarListItem[] => {
-    const rowsOf = (
-      list: readonly EnvironmentThreadShell[],
-      section: SidebarSection,
-    ): SidebarListItem[] =>
-      list.map((thread) => {
-        const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-        return { kind: "thread", key, section };
-      });
     // A group's row sits in the list beside its members, so the fold, the
     // motion pass and the sortable context all see one flat list as before.
     const itemsOf = (
@@ -2038,7 +2037,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     }
     if (snoozedThreads.length > 0) {
       items.push({ kind: "marker", marker: "snoozed-header" });
-      items.push(...rowsOf(visibleSnoozedThreads, "snoozed"));
+      items.push(...itemsOf(snoozedEntries, "snoozed"));
     }
     items.push({ kind: "marker", marker: "settled-header" });
     items.push({ kind: "marker", marker: "settled-placeholder" });
@@ -3959,9 +3958,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 }
                                 onToggle={(key) =>
                                   toggleGroup(
-                                    item.section === "pinned" || item.section === "settled"
-                                      ? `${item.section}:${key}`
-                                      : key,
+                                    item.section === "active" || item.section === "working"
+                                      ? key
+                                      : `${item.section}:${key}`,
                                   )
                                 }
                                 renaming={renamingGroupKey === group.key}
