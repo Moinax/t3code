@@ -7,7 +7,14 @@ import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models
 import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { CheckIcon, ChevronRightIcon, LayersIcon, PinIcon, Undo2Icon } from "lucide-react";
+import {
+  AlarmClockOffIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  LayersIcon,
+  PinIcon,
+  Undo2Icon,
+} from "lucide-react";
 import { type ReactNode, useLayoutEffect, useState } from "react";
 import { cn } from "~/lib/utils";
 import {
@@ -17,6 +24,7 @@ import {
 } from "../Sidebar.logic";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import {
+  RelativeTimeLabel,
   SIDEBAR_SORTABLE_DRAG_DISABLED,
   SIDEBAR_SORTABLE_DRAG_ENABLED,
   SidebarDropWell,
@@ -26,6 +34,7 @@ import {
   SnoozeMenuButton,
   type SidebarProviderEntry,
 } from "./SidebarThreadRow";
+import { groupTimestamp } from "./threadTime.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { SnoozePreset } from "../Sidebar.snooze";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
@@ -183,7 +192,26 @@ export type SidebarGroupMember = {
   readonly isSettled: boolean;
   readonly isPinned: boolean;
   readonly canSnooze: boolean;
+  readonly isSnoozed: boolean;
 };
+
+/**
+ * One member per project, in the order they appear.
+ *
+ * The icons answer "where is this", not "how many threads are there" — the
+ * count beside the name already says that. Three threads of one project are
+ * one icon, where repeating it only ate the title's width.
+ */
+function membersByProject(members: readonly SidebarGroupMember[]): readonly SidebarGroupMember[] {
+  const seen = new Set<string>();
+  return members.filter((member) => {
+    if (member.project === null) return false;
+    const key = `${member.project.environmentId}\u0000${member.project.workspaceRoot}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 /**
  * One member per agent, in the order they appear.
@@ -204,24 +232,29 @@ function membersByAgent(members: readonly SidebarGroupMember[]): readonly Sideba
 }
 
 /**
- * A folded group shaped like the threads it stands for: members' projects in a thread's project
- * slot, the work named once (a ticket's threads share a title), the group's name where a branch
- * would be, and the agents on the right.
+ * A folded group drawn as whatever its shelf is made of: a card where its members would
+ * have been cards, one line on the settled shelf where they would have been lines. Either
+ * way it stands for them, with their projects and what they are doing.
  */
 function SidebarFoldedGroupRow(props: {
   groupKey: string;
   name: string;
   size: number;
+  isActive?: boolean;
   members: readonly SidebarGroupMember[];
   onToggle: (groupKey: string) => void;
   onSettleThreads?: (threadKeys: readonly string[]) => void;
   onUnsettleThreads?: (threadKeys: readonly string[]) => void;
+  onUnsnoozeThreads?: (threadKeys: readonly string[]) => void;
   onSnoozeThreads?: (
     threadKeys: readonly string[],
     preset: Pick<SnoozePreset, "snoozedUntil">,
   ) => void;
   timestampFormat?: TimestampFormat;
+  /** The row its shelf is made of, as a thread's own row takes it. */
+  variant: "card" | "slim";
 }) {
+  const slim = props.variant === "slim";
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
   const state = groupStateLabel(props.members.map((member) => member.tone));
   // A folded group reports in the vocabulary of the rows it stands in for, and
@@ -238,11 +271,94 @@ function SidebarFoldedGroupRow(props: {
   // All of them or none: a half-unsettled group would leave rows on two
   // shelves, which is the thing this row exists to prevent.
   const unsettleKeys =
-    props.members.length > 0 && props.members.every((member) => member.isSettled)
-      ? props.members.map((member) => member.key)
-      : [];
+    props.members.length > 0 && props.members.every((member) => member.isSettled) ? memberKeys : [];
   const canSnoozeGroup =
     props.members.length > 0 && props.members.every((member) => member.canSnooze);
+  // Snoozed, the group's row is the only handle left on its threads: waking
+  // takes all of them back, as un-settling does.
+  const unsnoozeKeys = props.members
+    .filter((member) => member.isSnoozed)
+    .map((member) => member.key);
+  const quickActions = (
+    <span
+      className={cn(
+        "absolute right-0 flex items-center opacity-0 transition-opacity group-hover/folded-group:opacity-100",
+        snoozeMenuOpen && "opacity-100",
+      )}
+    >
+      {unsettleKeys.length > 0 && props.onUnsettleThreads ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label={`Un-settle ${unsettleKeys.length} threads`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onUnsettleThreads?.(unsettleKeys);
+                }}
+                className="inline-flex cursor-pointer items-center gap-0.5 rounded-md px-1.5 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <Undo2Icon className="size-3.5" />
+              </button>
+            }
+          />
+          <TooltipPopup side="top">{`Un-settle ${unsettleKeys.length} threads`}</TooltipPopup>
+        </Tooltip>
+      ) : null}
+      {unsnoozeKeys.length > 0 && props.onUnsnoozeThreads ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label={`Wake ${unsnoozeKeys.length} threads`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onUnsnoozeThreads?.(unsnoozeKeys);
+                }}
+                className="inline-flex cursor-pointer items-center gap-0.5 rounded-md px-1.5 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <AlarmClockOffIcon className="size-3.5" />
+              </button>
+            }
+          />
+          <TooltipPopup side="top">{`Wake ${unsnoozeKeys.length} threads`}</TooltipPopup>
+        </Tooltip>
+      ) : null}
+      {settleKeys.length > 0 && props.onSettleThreads ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label={`Settle ${settleKeys.length} threads`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onSettleThreads?.(settleKeys);
+                }}
+                className="inline-flex cursor-pointer items-center gap-0.5 rounded-md px-1.5 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <CheckIcon className="size-3.5" />
+              </button>
+            }
+          />
+          <TooltipPopup side="top">{`Settle ${settleKeys.length} threads`}</TooltipPopup>
+        </Tooltip>
+      ) : null}
+      {canSnoozeGroup && props.onSnoozeThreads && props.timestampFormat ? (
+        <SnoozeMenuButton
+          open={snoozeMenuOpen}
+          onOpenChange={setSnoozeMenuOpen}
+          onSnooze={(preset) => props.onSnoozeThreads?.(memberKeys, preset)}
+          timestampFormat={props.timestampFormat}
+          environmentId={props.members[0]!.thread.environmentId}
+          label={`Snooze ${props.size} threads`}
+        />
+      ) : null}
+      <ChevronRightIcon aria-hidden className="ml-0.5 size-4 shrink-0 text-muted-foreground" />
+    </span>
+  );
   return (
     // A div, not a button: the quick actions are buttons of their own, and a
     // button cannot hold another.
@@ -251,118 +367,120 @@ function SidebarFoldedGroupRow(props: {
       tabIndex={0}
       data-testid="sidebar-group-folded"
       aria-label={`Unfold ${props.name}, ${props.size} threads`}
+      // The row the open thread would have had is folded away, so this one
+      // answers for it: lit like that row, and the one the reveal scrolls to.
+      aria-current={props.isActive === true ? "page" : undefined}
       onClick={() => props.onToggle(props.groupKey)}
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         props.onToggle(props.groupKey);
       }}
-      className="group/folded-group relative block h-[4.875rem] w-full cursor-pointer overflow-hidden rounded-md px-(--sidebar-row-content-inset) py-(--sidebar-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      className={cn(
+        "group/folded-group relative w-full cursor-pointer overflow-hidden rounded-md px-(--sidebar-row-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        // The shape its own shelf gives its members: a one-line group among
+        // cards is as foreign as a card was among lines.
+        slim ? "flex h-8 items-center gap-1.5" : "block h-[4.875rem] py-(--sidebar-content-inset)",
+        props.isActive === true && "bg-sidebar-row-active text-sidebar-foreground",
+      )}
     >
-      <span className="flex h-5 min-w-0 items-center gap-1.5 text-xs">
-        {pinned ? (
-          <PinIcon aria-label="Pinned" className="size-3 shrink-0 text-muted-foreground/65" />
-        ) : null}
-        <span className="flex shrink-0 items-center gap-0.5">
-          {props.members.map((member) =>
-            member.project ? (
-              <ProjectFavicon key={member.key} project={member.project} className="size-4" />
-            ) : null,
+      {slim ? (
+        <>
+          {pinned ? (
+            <PinIcon aria-label="Pinned" className="size-3 shrink-0 text-muted-foreground/65" />
+          ) : null}
+          <span className="flex shrink-0 items-center gap-0.5 opacity-40 grayscale transition-opacity group-focus-within/folded-group:opacity-100 group-focus-within/folded-group:grayscale-0 group-hover/folded-group:opacity-100 group-hover/folded-group:grayscale-0">
+            {membersByProject(props.members).map((member) =>
+              member.project ? (
+                <ProjectFavicon key={member.key} project={member.project} className="size-4" />
+              ) : null,
+            )}
+          </span>
+          {/* Read in the words of the rows it hides, so it recedes with them
+              instead of being the one bright title on a quiet shelf. */}
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-sm",
+              "group-focus-within/folded-group:text-foreground group-hover/folded-group:text-foreground",
+              state.tone === "done"
+                ? "font-normal text-secondary-label"
+                : "font-medium text-foreground",
+            )}
+          >
+            {title}
+          </span>
+          {state.tone === "done" ? null : (
+            <span className={cn("inline-flex shrink-0 items-center", stateVisual.className)}>
+              <stateVisual.Icon aria-hidden className="size-3" />
+              <span role="status" className="sr-only">
+                {state.label}
+              </span>
+            </span>
           )}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-secondary-label font-medium tabular-nums">
-          {props.size} threads
-        </span>
-        {/* The state and the fold share one slot, as a thread's row shares its
-            own between its state and its controls: what the group is doing is
-            worth more than an arrow, until the pointer says otherwise. */}
-        <span className="relative flex h-5 shrink-0 items-center">
-          <span
-            className={cn(
-              "inline-flex items-center gap-1 font-medium transition-opacity group-hover/folded-group:opacity-0",
-              stateVisual.className,
-            )}
-          >
-            <stateVisual.Icon aria-hidden className="size-4 shrink-0" />
-            <span role="status">{state.label}</span>
+          {/* The group's own name and size, where a thread's row carries its meta.
+              Out of the way while the pointer is here: the quick actions land on
+              this half of the row. */}
+          <span className="flex min-w-0 shrink items-center gap-1 text-xs text-muted-foreground/40 transition-opacity group-hover/folded-group:opacity-0">
+            <span className="truncate">{props.name}</span>
+            <span className="shrink-0 tabular-nums">{props.size}</span>
           </span>
-          <span
-            className={cn(
-              "absolute right-0 flex items-center opacity-0 transition-opacity group-hover/folded-group:opacity-100",
-              snoozeMenuOpen && "opacity-100",
-            )}
-          >
-            {unsettleKeys.length > 0 && props.onUnsettleThreads ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={`Un-settle ${unsettleKeys.length} threads`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        props.onUnsettleThreads?.(unsettleKeys);
-                      }}
-                      className="inline-flex cursor-pointer items-center gap-0.5 rounded-md px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                    >
-                      <Undo2Icon className="size-3.5" />
-                    </button>
-                  }
-                />
-                <TooltipPopup side="top">{`Un-settle ${unsettleKeys.length} threads`}</TooltipPopup>
-              </Tooltip>
-            ) : null}
-            {settleKeys.length > 0 && props.onSettleThreads ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={`Settle ${settleKeys.length} threads`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        props.onSettleThreads?.(settleKeys);
-                      }}
-                      className="inline-flex cursor-pointer items-center gap-0.5 rounded-md px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                    >
-                      <CheckIcon className="size-3.5" />
-                    </button>
-                  }
-                />
-                <TooltipPopup side="top">{`Settle ${settleKeys.length} threads`}</TooltipPopup>
-              </Tooltip>
-            ) : null}
-            {canSnoozeGroup && props.onSnoozeThreads && props.timestampFormat ? (
-              <SnoozeMenuButton
-                open={snoozeMenuOpen}
-                onOpenChange={setSnoozeMenuOpen}
-                onSnooze={(preset) => props.onSnoozeThreads?.(memberKeys, preset)}
-                timestampFormat={props.timestampFormat}
-                environmentId={props.members[0]!.thread.environmentId}
-                label={`Snooze ${props.size} threads`}
-              />
-            ) : null}
-            <ChevronRightIcon
-              aria-hidden
-              className="ml-0.5 size-4 shrink-0 text-muted-foreground"
-            />
+          {/* The time and the fold share one slot, as a thread's row shares its own
+              between its time and its controls. */}
+          <span className="relative flex h-5 shrink-0 items-center text-xs">
+            <span className="inline-flex justify-end tabular-nums text-secondary-label transition-opacity group-hover/folded-group:opacity-0">
+              <RelativeTimeLabel timestamp={groupTimestamp(props.members)} />
+            </span>
+            {quickActions}
           </span>
-        </span>
-      </span>
-      <span className="mt-1 block truncate text-sm font-medium text-foreground">{title}</span>
-      <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs">
-        <LayersIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/40" />
-        <span className="min-w-0 flex-1 truncate text-muted-foreground/40">{props.name}</span>
-        <span aria-hidden className="ml-auto inline-flex shrink-0 items-center gap-1">
-          {membersByAgent(props.members).map((member) => (
-            <SidebarProviderStack
-              key={member.key}
-              thread={member.thread}
-              providerEntryByInstanceId={member.providerEntryByInstanceId}
-            />
-          ))}
-        </span>
-      </span>
+        </>
+      ) : (
+        <>
+          <span className="flex h-5 min-w-0 items-center gap-1.5 text-xs">
+            {pinned ? (
+              <PinIcon aria-label="Pinned" className="size-3 shrink-0 text-muted-foreground/65" />
+            ) : null}
+            <span className="flex shrink-0 items-center gap-0.5">
+              {membersByProject(props.members).map((member) =>
+                member.project ? (
+                  <ProjectFavicon key={member.key} project={member.project} className="size-4" />
+                ) : null,
+              )}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-secondary-label font-medium tabular-nums">
+              {props.size} threads
+            </span>
+            {/* The state and the fold share one slot, as a thread's row shares its
+                own between its state and its controls: what the group is doing is
+                worth more than an arrow, until the pointer says otherwise. */}
+            <span className="relative flex h-5 shrink-0 items-center">
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1 font-medium transition-opacity group-hover/folded-group:opacity-0",
+                  stateVisual.className,
+                )}
+              >
+                <stateVisual.Icon aria-hidden className="size-4 shrink-0" />
+                <span role="status">{state.label}</span>
+              </span>
+              {quickActions}
+            </span>
+          </span>
+          <span className="mt-1 block truncate text-sm font-medium text-foreground">{title}</span>
+          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs">
+            <LayersIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/40" />
+            <span className="min-w-0 flex-1 truncate text-muted-foreground/40">{props.name}</span>
+            <span aria-hidden className="ml-auto inline-flex shrink-0 items-center gap-1">
+              {membersByAgent(props.members).map((member) => (
+                <SidebarProviderStack
+                  key={member.key}
+                  thread={member.thread}
+                  providerEntryByInstanceId={member.providerEntryByInstanceId}
+                />
+              ))}
+            </span>
+          </span>
+        </>
+      )}
     </div>
   );
 }
@@ -400,14 +518,18 @@ export function SidebarGroupHeader(props: {
   onCancelRename?: () => void;
   onContextMenu?: (groupKey: string, position: { x: number; y: number }) => void;
   isJoinTarget?: boolean;
+  /** The open thread is one of the folded members, so this row stands in for it. */
+  isActive?: boolean;
   onSettleThreads?: (threadKeys: readonly string[]) => void;
   onUnsettleThreads?: (threadKeys: readonly string[]) => void;
+  onUnsnoozeThreads?: (threadKeys: readonly string[]) => void;
   onSnoozeThreads?: (
     threadKeys: readonly string[],
     preset: Pick<SnoozePreset, "snoozedUntil">,
   ) => void;
   timestampFormat?: TimestampFormat;
   draggable?: boolean;
+  variant: "card" | "slim";
 }) {
   // The group's row is its handle: picking it up moves the whole block, the
   // way picking up a thread moves that thread.

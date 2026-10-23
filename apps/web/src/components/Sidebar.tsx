@@ -622,12 +622,15 @@ function useSidebarThreads(input: {
       groupKeyOf,
       nameOf: groupNameOf,
       collapsed,
+      // Kept as an entry, not as a row: a fold takes the open thread with the
+      // rest of its group — its row would repeat the title the group's own row
+      // already carries — but traversal still has to have somewhere to start.
       keepThread: (thread) => threadShellKey(thread) === routeRowThreadKey,
     });
   // A shelf holds what has been put away, so a group keeps to one row there
   // until it is opened on that shelf: `collapsedGroups` names the inbox's
   // folds, and a shelf's entries name its unfolds instead.
-  const shelfFold = (section: "pinned" | "settled") => (key: string) =>
+  const shelfFold = (section: "pinned" | "settled" | "snoozed") => (key: string) =>
     !collapsedGroups.includes(`${section}:${key}`);
   // One pass per shelf, so a group's row only appears where two of its threads
   // actually are: a lone member of a ticket is just a thread.
@@ -637,12 +640,14 @@ function useSidebarThreads(input: {
   );
   const [pinnedEntries = []] = layoutOf([pinnedThreads], shelfFold("pinned"));
   const [settledEntries = []] = layoutOf([renderedSettledRows], shelfFold("settled"));
+  const [snoozedEntries = []] = layoutOf([visibleSnoozedThreads], shelfFold("snoozed"));
   const threadsOf = (entries: readonly ThreadGroupEntry<EnvironmentThreadShell>[]) =>
     entries.flatMap((entry) => (entry.kind === "thread" ? [entry.thread] : []));
   const renderedActiveThreads = threadsOf(activeEntries);
   const renderedWorkingThreads = threadsOf(workingEntries);
   const renderedPinnedThreads = threadsOf(pinnedEntries);
   const renderedSettledThreads = threadsOf(settledEntries);
+  const renderedSnoozedThreads = threadsOf(snoozedEntries);
   // Both names a fold can go under: the inbox folds by group, a shelf unfolds
   // by group *and* shelf, and the prune must keep whichever is on screen.
   const liveGroupKeys = new Set([
@@ -655,6 +660,9 @@ function useSidebarThreads(input: {
     ...settledEntries.flatMap((entry) =>
       entry.kind === "group" ? [`settled:${entry.group.key}`] : [],
     ),
+    ...snoozedEntries.flatMap((entry) =>
+      entry.kind === "group" ? [`snoozed:${entry.group.key}`] : [],
+    ),
   ]);
   // Folded rows stay out of the ordered list like a collapsed shelf's: selection,
   // sweeps, jump hints and traversal must not reach a hidden row. Fold pruning uses
@@ -663,7 +671,7 @@ function useSidebarThreads(input: {
   const foldableGroupKeys = new Set(
     threads.flatMap((thread) => {
       const key = groupKeyOf(thread);
-      return key === null ? [] : [key, `pinned:${key}`, `settled:${key}`];
+      return key === null ? [] : [key, `pinned:${key}`, `settled:${key}`, `snoozed:${key}`];
     }),
   );
   const projectFolders =
@@ -692,7 +700,7 @@ function useSidebarThreads(input: {
       ? renderedActiveThreads
       : projectFolders.flatMap((folder) => folder.threads)),
     ...renderedWorkingThreads,
-    ...visibleSnoozedThreads,
+    ...renderedSnoozedThreads,
     ...renderedSettledThreads,
   ];
   const sectionByThreadKey = new Map<string, SidebarSection>();
@@ -736,12 +744,12 @@ function useSidebarThreads(input: {
       setProjectExpanded(keys, !resolveProjectExpanded(projectExpandedById, keys));
     },
     renderedSettledThreads,
-    visibleSnoozedThreads,
     visibleWorkingThreads,
     pinnedEntries,
     activeEntries,
     workingEntries,
     settledEntries,
+    snoozedEntries,
     manualGroups,
     setManualGroups,
     setUngroupedThreads,
@@ -1530,11 +1538,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleWorkingShelf,
     projectFolders,
     toggleProjectFolder,
-    visibleSnoozedThreads,
     pinnedEntries,
     activeEntries,
     workingEntries,
     settledEntries,
+    snoozedEntries,
     manualGroups,
     setManualGroups,
     setUngroupedThreads,
@@ -2113,6 +2121,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       attemptUnsettle(scopeThreadRef(thread.environmentId, thread.id));
     }
   };
+  const unsnoozeThreads = (threadKeys: readonly string[]) => {
+    for (const threadKey of threadKeys) {
+      const thread = threadByAnyKey.get(threadKey);
+      if (!thread) continue;
+      attemptUnsnooze(scopeThreadRef(thread.environmentId, thread.id));
+    }
+  };
   const unpinThreads = (threadKeys: readonly string[]) => {
     for (const threadKey of threadKeys) {
       const thread = threadByAnyKey.get(threadKey);
@@ -2209,6 +2224,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     [activeEntries, "active"],
     [workingEntries, "working"],
     [settledEntries, "settled"],
+    [snoozedEntries, "snoozed"],
   ] as const) {
     for (const entry of entries) {
       if (entry.kind === "group") {
@@ -2225,6 +2241,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     [activeThreads, "active"],
     [workingThreads, "working"],
     [settledThreads, "settled"],
+    [snoozedThreads, "snoozed"],
   ] as const)
     for (const thread of threads) {
       const plainKey = groupKeyOf(thread);
@@ -2248,39 +2265,41 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         isSettled: thread.settledOverride === "settled",
         isPinned: thread.pinnedAt != null,
         canSnooze: serverConfigs.has(thread.environmentId) && canSnooze(thread, { now: snoozeNow }),
+        isSnoozed:
+          serverConfigs.has(thread.environmentId) && effectiveSnoozed(thread, { now: snoozeNow }),
       });
       groupMembersByKey.set(groupKey, members);
     }
   const sidebarListItemsFresh = ((): readonly SidebarListItem[] => {
-    const rowsOf = (
-      list: readonly EnvironmentThreadShell[],
-      section: SidebarSection,
-    ): SidebarListItem[] =>
-      list.map((thread) => {
-        const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-        return { kind: "thread", key, section };
-      });
     // A group's row sits in the list beside its members, so the fold, the
     // motion pass and the sortable context all see one flat list as before.
     const itemsOf = (
       entries: readonly ThreadGroupEntry<EnvironmentThreadShell>[],
       section: SidebarSection,
     ): SidebarListItem[] =>
-      entries.map((entry) =>
+      entries.flatMap((entry): SidebarListItem[] =>
         entry.kind === "group"
-          ? {
-              kind: "group",
-              groupKey: entry.group.key,
-              section,
-              memberKeys: (
-                groupMembersByKey.get(groupShelfKey(entry.group.key, section)) ?? []
-              ).map((member) => member.key),
-            }
-          : {
-              kind: "thread",
-              key: scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)),
-              section,
-            },
+          ? [
+              {
+                kind: "group",
+                groupKey: entry.group.key,
+                section,
+                memberKeys: (
+                  groupMembersByKey.get(groupShelfKey(entry.group.key, section)) ?? []
+                ).map((member) => member.key),
+              } as const,
+            ]
+          : // The open thread a fold kept holds its place in the order without
+            // taking a row: the group's own row stands in for it.
+            entry.group?.collapsed === true
+            ? []
+            : [
+                {
+                  kind: "thread",
+                  key: scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)),
+                  section,
+                } as const,
+              ],
       );
     // Boring mode keeps a pinned open project or one the user filtered to, so it can start a thread.
     if (
@@ -2306,7 +2325,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     }
     if (snoozedThreads.length > 0) {
       items.push({ kind: "marker", marker: "snoozed-header" });
-      items.push(...rowsOf(visibleSnoozedThreads, "snoozed"));
+      items.push(...itemsOf(snoozedEntries, "snoozed"));
     }
     items.push({ kind: "marker", marker: "settled-header" });
     items.push({ kind: "marker", marker: "settled-placeholder" });
@@ -2733,6 +2752,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       if (shelved === "settled" || shelved === "pinned") {
         if (shelved === "settled") unsettleThreads(members);
         else unpinThreads(members);
+        return;
+      }
+      // Snoozed is no drop target of its own: a release still over it lands
+      // nowhere, and only one that reaches the inbox wakes the group.
+      if (shelved === "snoozed") {
+        if (shelf === "active" || shelf === "working") unsnoozeThreads(members);
         return;
       }
       moveGroup(
@@ -4312,6 +4337,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               <SidebarGroupHeader
                                 key={`group:${item.section}:${item.groupKey}`}
                                 itemId={groupId}
+                                // Folded, it stands in for its members' rows, so it
+                                // takes the one its shelf would have given them.
+                                variant={slotted ? "card" : "slim"}
                                 groupKey={group.key}
                                 name={group.name}
                                 size={group.size}
@@ -4322,9 +4350,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 }
                                 onToggle={(key) =>
                                   toggleGroup(
-                                    item.section === "pinned" || item.section === "settled"
-                                      ? `${item.section}:${key}`
-                                      : key,
+                                    item.section === "active" || item.section === "working"
+                                      ? key
+                                      : `${item.section}:${key}`,
                                   )
                                 }
                                 renaming={renamingGroupKey === group.key}
@@ -4333,14 +4361,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 onContextMenu={handleGroupContextMenu}
                                 onSettleThreads={settleThreads}
                                 onUnsettleThreads={unsettleThreads}
+                                onUnsnoozeThreads={unsnoozeThreads}
                                 onSnoozeThreads={snoozeThreads}
                                 timestampFormat={timestampFormat}
                                 // With the Working shelf on the inbox ignores hand
-                                // placement, so nothing to drag for. Elsewhere the
-                                // gesture is the shelf's: dragging out of Pinned
-                                // unpins the group, out of Settled un-settles it.
+                                // placement. Elsewhere the drag is the shelf's: out of
+                                // Pinned unpins, out of Settled un-settles, out of
+                                // Snoozed wakes.
                                 draggable={
-                                  item.section === "pinned" || item.section === "settled"
+                                  item.section === "pinned" ||
+                                  item.section === "settled" ||
+                                  item.section === "snoozed"
                                     ? true
                                     : !workingShelfEnabled &&
                                       (
@@ -4352,6 +4383,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                       )
                                 }
                                 isJoinTarget={dragState?.joinTargetId === groupId}
+                                // Folded over the open thread, so this row is
+                                // the one standing in for it.
+                                isActive={
+                                  routeRowThreadKey !== null &&
+                                  groupEntryByThreadKey.get(routeRowThreadKey)?.group.key ===
+                                    group.key &&
+                                  sectionByThreadKey.get(routeRowThreadKey) === item.section
+                                }
                               />,
                             );
                             if (slotted) owed.push({ id: groupId, side: "below" });
