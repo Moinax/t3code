@@ -35,7 +35,6 @@ import {
   createInboxReturnTracker,
   isThreadWorking,
 } from "@t3tools/client-runtime/state/thread-inbox";
-import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
   nextShownOrder,
   threadSearchMatchKey,
@@ -187,7 +186,6 @@ import {
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
-  firstValidTimestampMs,
   isGroupJoinHover,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
@@ -213,7 +211,7 @@ import {
   sidebarListItemId,
   sidebarThreadKeyAtY,
   sortInboxThreadsByReturn,
-  sortPinnedThreadsForSidebar,
+  sortSidebarShelves,
   sortThreadsForSidebar,
   sortWorkingThreadsBySend,
   useSnoozeWakeClock,
@@ -879,7 +877,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     }
   }
   // Availability gates dragging only; sorting must stay consistent across clients.
-  const sortedPinned = sortPinnedThreadsForSidebar(pinned);
+  const shelves = sortSidebarShelves({ pinned, snoozed, settled, groupKeyOf });
   // A ticket's threads share a live section and sit together.
   const live = cohereGroupSections({
     active,
@@ -899,9 +897,9 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   return {
     pinnedThreads:
       optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
-        ? sortedPinned
+        ? shelves.pinned
         : orderItemsByPreferredIds({
-            items: sortedPinned,
+            items: shelves.pinned,
             preferredIds: optimisticDrop.order,
             getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           }),
@@ -916,12 +914,8 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
             getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           }),
     workingThreads: clusterThreadsByGroup(sortWorkingThreadsBySend(live.working), groupKeyOf),
-    snoozedThreads: snoozed.toSorted(
-      (left, right) =>
-        firstValidTimestampMs(left.snoozedUntil ?? null) -
-        firstValidTimestampMs(right.snoozedUntil ?? null),
-    ),
-    settledThreads: sortSettledThreads(settled),
+    snoozedThreads: shelves.snoozed,
+    settledThreads: shelves.settled,
     visibleThreads: visible,
     snoozeNow: preciseNow,
   };

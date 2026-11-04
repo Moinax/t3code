@@ -31,6 +31,7 @@ import {
   resolveSidebarReorderableThreadKeys,
   sortPinnedThreadsForSidebar,
   sortScopedProjectsForSidebar,
+  sortSidebarShelves,
   sortSidebarV2ProjectGroups,
   shouldNavigateAfterThreadPark,
   type SidebarListItem,
@@ -823,6 +824,35 @@ describe("pinOrderKeyBetween", () => {
     expect(pinOrderKeyBetween("A!", null)).toBeNull();
     expect(pinOrderKeyBetween(null, "ma")).toBeNull();
     expect(pinOrderKeyBetween("m", "m")).toBeNull();
+  });
+});
+
+describe("sortSidebarShelves", () => {
+  it("keeps a group's threads together on every shelf, at its best-placed member's slot", () => {
+    const row = (id: string, rank: number) => ({
+      id: ThreadId.make(id),
+      environmentId: EnvironmentId.make("local"),
+      createdAt: "2026-03-09T00:00:00.000Z",
+      updatedAt: "2026-03-09T00:00:00.000Z",
+      latestUserMessageAt: null,
+      latestRun: null,
+      pinOrderKey: `k${rank}`,
+      snoozedUntil: `2026-03-1${rank}T00:00:00.000Z`,
+      settledAt: `2026-03-1${9 - rank}T00:00:00.000Z`,
+    });
+    const threads = [row("grouped-late", 2), row("loose", 1), row("grouped-early", 0)];
+
+    const shelves = sortSidebarShelves({
+      pinned: threads,
+      snoozed: threads,
+      settled: threads,
+      groupKeyOf: (thread) => (thread.id.startsWith("grouped") ? "group" : null),
+    });
+
+    const together = ["grouped-early", "grouped-late", "loose"];
+    expect(shelves.pinned.map((thread) => thread.id)).toEqual(together);
+    expect(shelves.snoozed.map((thread) => thread.id)).toEqual(together);
+    expect(shelves.settled.map((thread) => thread.id)).toEqual(together);
   });
 });
 

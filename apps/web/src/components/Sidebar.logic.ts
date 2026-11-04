@@ -1,6 +1,10 @@
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import {
+  resolveThreadWorkingStartedAt,
+  type EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/models";
+import { clusterThreadsByGroup } from "@t3tools/client-runtime/state/thread-groups";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
@@ -31,6 +35,8 @@ import {
 import {
   getThreadSortTimestamp,
   planPinnedReorder,
+  sortPinnedThreadsByOrderKey,
+  sortSettledThreads,
   sortThreads,
   toSortableTimestamp,
   type ThreadSortInput,
@@ -1168,9 +1174,7 @@ export type SidebarV2TopStatusKind =
   | "woke"
   | "working";
 
-export function firstValidTimestampMs(
-  ...candidates: ReadonlyArray<string | null | undefined>
-): number {
+function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | undefined>): number {
   for (const candidate of candidates) {
     if (candidate == null) continue;
     const parsed = Date.parse(candidate);
@@ -1187,6 +1191,41 @@ export {
 
 export { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
+
+/** Each shelf keeps its own sort, and a group's threads sit together inside it. */
+export function sortSidebarShelves<
+  T extends Pick<
+    EnvironmentThreadShell,
+    | "id"
+    | "environmentId"
+    | "createdAt"
+    | "pinOrderKey"
+    | "snoozedUntil"
+    | "settledAt"
+    | "latestUserMessageAt"
+    | "latestRun"
+    | "updatedAt"
+  >,
+>(input: {
+  readonly pinned: readonly T[];
+  readonly snoozed: readonly T[];
+  readonly settled: readonly T[];
+  readonly groupKeyOf: (thread: T) => string | null;
+}) {
+  const { groupKeyOf } = input;
+  return {
+    pinned: clusterThreadsByGroup(sortPinnedThreadsByOrderKey(input.pinned), groupKeyOf),
+    snoozed: clusterThreadsByGroup(
+      input.snoozed.toSorted(
+        (left, right) =>
+          firstValidTimestampMs(left.snoozedUntil ?? null) -
+          firstValidTimestampMs(right.snoozedUntil ?? null),
+      ),
+      groupKeyOf,
+    ),
+    settled: clusterThreadsByGroup(sortSettledThreads(input.settled), groupKeyOf),
+  };
+}
 
 const EMPTY_CONTENT_MATCH_KEYS: ReadonlySet<string> = new Set<string>();
 

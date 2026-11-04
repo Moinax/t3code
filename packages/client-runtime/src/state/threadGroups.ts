@@ -106,12 +106,8 @@ export function cohereGroupSections<T>(input: {
 }
 
 /**
- * Reorder a sorted section so a group's threads sit together, at the slot its
- * best-placed member already holds. Grouping only ever pulls members up to
- * that slot, so a group rises as soon as any one of its members does, and the
- * arrangement stays a default rather than a sort of its own. A hand-placed
- * member is pulled like any other: a drop outside its block already takes it
- * out of the group, so one left behind was only ever placed before it joined.
+ * Reorder a sorted section so a group's threads sit together, at the slot its best-placed member
+ * holds. A hand-placed member is pulled too: a drop outside its block already leaves the group.
  */
 export function clusterThreadsByGroup<T>(
   sorted: readonly T[],

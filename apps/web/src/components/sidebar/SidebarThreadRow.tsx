@@ -162,6 +162,10 @@ function JumpHintBadge(props: { label: string }) {
   );
 }
 
+const GROUP_RAIL_CLASS_NAME =
+  "relative before:absolute before:inset-y-0 before:left-1 before:z-20 before:w-0.5 before:bg-primary/70 before:content-['']";
+const GROUP_RAIL_END_CLASS_NAME = "before:bottom-3 before:rounded-b";
+
 const JUMP_HINT_SLOT_CLASS_NAME =
   "[&>:not([data-jump-hint])]:invisible [&>:not([data-jump-hint])]:absolute";
 
@@ -1258,6 +1262,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           "list-none [content-visibility:auto] [contain-intrinsic-size:auto_--spacing(9)]",
           metaLine !== null && multiline && "[contain-intrinsic-size:auto_--spacing(13.5)]",
           sortable?.isDragging && "relative z-20",
+          props.groupName !== undefined && GROUP_RAIL_CLASS_NAME,
+          props.groupName !== undefined && props.isGroupEnd === true && GROUP_RAIL_END_CLASS_NAME,
         )}
       >
         <Tooltip disabled={sortable?.isDragging}>
@@ -1461,11 +1467,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         // The rail sits in the card's own left padding, so grouping a thread
         // costs no width. On the li rather than the card, it closes the gap
         // between two members instead of restarting at each one.
-        props.groupName !== undefined &&
-          "relative before:absolute before:inset-y-0 before:left-1 before:z-20 before:w-0.5 before:bg-primary/70 before:content-['']",
-        props.groupName !== undefined &&
-          props.isGroupEnd === true &&
-          "before:bottom-3 before:rounded-b",
+        props.groupName !== undefined && GROUP_RAIL_CLASS_NAME,
+        props.groupName !== undefined && props.isGroupEnd === true && GROUP_RAIL_END_CLASS_NAME,
       )}
     >
       {props.isJoinTarget === true ? <SidebarJoinBadge label="Group" /> : null}
