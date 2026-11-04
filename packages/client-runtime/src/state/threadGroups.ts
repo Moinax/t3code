@@ -4,6 +4,9 @@
  * decisions a sibling must not undo. Shared so every client lays groups out the same way.
  */
 
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
+
 export interface GroupableThread {
   readonly title: string;
 }
@@ -106,12 +109,8 @@ export function cohereGroupSections<T>(input: {
 }
 
 /**
- * Reorder a sorted section so a group's threads sit together, at the slot its
- * best-placed member already holds. Grouping only ever pulls members up to
- * that slot, so a group rises as soon as any one of its members does, and the
- * arrangement stays a default rather than a sort of its own. A hand-placed
- * member is pulled like any other: a drop outside its block already takes it
- * out of the group, so one left behind was only ever placed before it joined.
+ * Reorder a sorted section so a group's threads sit together, at the slot its best-placed member
+ * holds. A hand-placed member is pulled too: a drop outside its block already leaves the group.
  */
 export function clusterThreadsByGroup<T>(
   sorted: readonly T[],
@@ -236,15 +235,31 @@ export type ThreadGroupTone = "done" | "working" | "attention";
  * What a folded group says in a thread's state slot: the most demanding state and how many are
  * in it, since what is left to do is what makes someone unfold it.
  */
-export function groupStateLabel(tones: readonly ThreadGroupTone[]): {
+export function groupStateLabel(
+  tones: readonly ThreadGroupTone[],
+  resolve: MFunctionType = mFallback,
+): {
   readonly tone: ThreadGroupTone;
   readonly label: string;
 } {
   const attention = tones.filter((tone) => tone === "attention").length;
-  if (attention > 0) return { tone: "attention", label: `${attention} to look at` };
+  if (attention > 0)
+    return {
+      tone: "attention",
+      label: resolve(msg("{count} to look at", { count: attention })),
+    };
   const working = tones.filter((tone) => tone === "working").length;
-  if (working > 0) return { tone: "working", label: `${working} working` };
-  return { tone: "done", label: "Done" };
+  if (working > 0)
+    return {
+      tone: "working",
+      label: resolve(
+        msg("{count} working", { count: working, $context: "number of threads still running" }),
+      ),
+    };
+  return {
+    tone: "done",
+    label: resolve(msg("Done", { $context: "every thread in a group is finished" })),
+  };
 }
 
 /**
@@ -377,10 +392,13 @@ export function pruneManualGroups(
 }
 
 /** A sensible name to start from: the ticket they share, or nothing special. */
-export function suggestGroupName(titles: readonly string[]): string {
+export function suggestGroupName(
+  titles: readonly string[],
+  resolve: MFunctionType = mFallback,
+): string {
   const keys = new Set(titles.map((title) => ticketGroupKeyOf(title)));
   const only = keys.size === 1 ? [...keys][0] : null;
-  return only ?? "New group";
+  return only ?? resolve(msg("New group"));
 }
 
 /**

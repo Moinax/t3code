@@ -38,7 +38,6 @@ import {
   createInboxReturnTracker,
   isThreadWorking,
 } from "@t3tools/client-runtime/state/thread-inbox";
-import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
   nextShownOrder,
   threadSearchMatchKey,
@@ -190,7 +189,6 @@ import {
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
-  firstValidTimestampMs,
   isGroupJoinHover,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
@@ -217,7 +215,7 @@ import {
   sidebarListItemId,
   sidebarThreadKeyAtY,
   sortInboxThreadsByReturn,
-  sortPinnedThreadsForSidebar,
+  sortSidebarShelves,
   sortThreadsForSidebar,
   sortWorkingThreadsBySend,
   useSnoozeWakeClock,
@@ -891,7 +889,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     }
   }
   // Availability gates dragging only; sorting must stay consistent across clients.
-  const sortedPinned = sortPinnedThreadsForSidebar(pinned);
+  const shelves = sortSidebarShelves({ pinned, snoozed, settled, groupKeyOf });
   // A ticket's threads share a live section and sit together.
   const live = cohereGroupSections({
     active,
@@ -911,9 +909,9 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   return {
     pinnedThreads:
       optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
-        ? sortedPinned
+        ? shelves.pinned
         : orderItemsByPreferredIds({
-            items: sortedPinned,
+            items: shelves.pinned,
             preferredIds: optimisticDrop.order,
             getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           }),
@@ -928,12 +926,8 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
             getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           }),
     workingThreads: clusterThreadsByGroup(sortWorkingThreadsBySend(live.working), groupKeyOf),
-    snoozedThreads: snoozed.toSorted(
-      (left, right) =>
-        firstValidTimestampMs(left.snoozedUntil ?? null) -
-        firstValidTimestampMs(right.snoozedUntil ?? null),
-    ),
-    settledThreads: sortSettledThreads(settled),
+    snoozedThreads: shelves.snoozed,
+    settledThreads: shelves.settled,
     visibleThreads: visible,
     snoozeNow: preciseNow,
   };
@@ -2704,6 +2698,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       newGroupId: randomUUID(),
       newGroupName: suggestGroupName(
         [targetTitle, draggedTitle].flatMap((title) => (title === null ? [] : [title])),
+        messages,
       ),
     };
     const plan = planGroupDrop({ manualGroups, ...drop });
@@ -2785,8 +2780,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to reorder active threads",
-              description: error instanceof Error ? error.message : "An error occurred.",
+              title: gt("Failed to reorder active threads"),
+              description: error instanceof Error ? error.message : gt("An error occurred."),
             }),
           );
         }
@@ -3162,7 +3157,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 ]
               : []),
             ...(count > 1 && projectFolders === null
-              ? [{ id: "group", label: `Group (${count})`, separatorBefore: true }]
+              ? [{ id: "group", label: gt("Group ({count})", { count }), separatorBefore: true }]
               : []),
             { id: "mark-unread", label: gt("Mark unread ({count})", { count }) },
             {
@@ -3184,7 +3179,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         setManualGroups((current) =>
           addManualGroup(current, {
             id,
-            name: suggestGroupName(selectedThreads.map((thread) => thread.title)),
+            name: suggestGroupName(
+              selectedThreads.map((thread) => thread.title),
+              messages,
+            ),
             members: threadKeys,
           }),
         );
@@ -3413,8 +3411,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             [
-              { id: "rename", label: "Rename group" },
-              { id: "ungroup", label: "Ungroup", destructive: true },
+              { id: "rename", label: gt("Rename group") },
+              { id: "ungroup", label: gt("Ungroup"), destructive: true },
             ],
             position,
           ),
@@ -4452,7 +4450,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         return (
                           <SidebarDropZone
                             key={`drop:${slots[0]!.side}:${slots[0]!.id}`}
-                            label={lit ? "Move here" : ""}
+                            label={lit ? gt("Move here") : ""}
                             open={lit}
                             isDropTarget={lit}
                           />
@@ -4622,7 +4620,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               <SidebarDropZone
                                 key="pinned-drop"
                                 testId="sidebar-pinned-drop"
-                                label="Pin here"
+                                label={gt("Pin here")}
                                 // The shelf has no rows of its own to drop
                                 // between, so its zone stands in for them.
                                 open={from !== null && pinnedThreads.length === 0}
@@ -4716,7 +4714,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               <SidebarDropZone
                                 key="settled-drop"
                                 testId="sidebar-settled-drop"
-                                label="Settle here"
+                                label={gt("Settle here")}
                                 open={from !== null && settledThreads.length > 0}
                                 isDropTarget={dragTargetSection === "settled"}
                               />,

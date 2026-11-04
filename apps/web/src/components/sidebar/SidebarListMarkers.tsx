@@ -15,6 +15,7 @@ import {
   PinIcon,
   Undo2Icon,
 } from "lucide-react";
+import { useGT, useMessages } from "gt-react";
 import { type ReactNode, useLayoutEffect, useState } from "react";
 import { cn } from "~/lib/utils";
 import {
@@ -257,9 +258,14 @@ function SidebarFoldedGroupRow(props: {
   /** The row its shelf is made of, as a thread's own row takes it. */
   variant: "card" | "slim";
 }) {
+  const gt = useGT();
   const slim = props.variant === "slim";
   const [snoozeMenuOpen, setSnoozeMenuOpen] = useState(false);
-  const state = groupStateLabel(props.members.map((member) => member.tone));
+  const messages = useMessages();
+  const state = groupStateLabel(
+    props.members.map((member) => member.tone),
+    messages,
+  );
   // A folded group reports in the vocabulary of the rows it stands in for, and
   // a group wanting attention is a thread asking for input.
   const stateVisual = sidebarStateVisual[state.tone === "attention" ? "input" : state.tone];
@@ -282,6 +288,16 @@ function SidebarFoldedGroupRow(props: {
   const unsnoozeKeys = props.members
     .filter((member) => member.isSnoozed)
     .map((member) => member.key);
+  const unsettleLabel = gt(
+    "{count, plural, =1 {Un-settle 1 thread} other {Un-settle {count} threads}}",
+    { count: unsettleKeys.length },
+  );
+  const wakeLabel = gt("{count, plural, =1 {Wake 1 thread} other {Wake {count} threads}}", {
+    count: unsnoozeKeys.length,
+  });
+  const settleLabel = gt("{count, plural, =1 {Settle 1 thread} other {Settle {count} threads}}", {
+    count: settleKeys.length,
+  });
   const quickActions = (
     <span
       className={cn(
@@ -295,7 +311,7 @@ function SidebarFoldedGroupRow(props: {
             render={
               <button
                 type="button"
-                aria-label={`Un-settle ${unsettleKeys.length} threads`}
+                aria-label={unsettleLabel}
                 onClick={(event) => {
                   event.stopPropagation();
                   props.onUnsettleThreads?.(unsettleKeys);
@@ -306,7 +322,7 @@ function SidebarFoldedGroupRow(props: {
               </button>
             }
           />
-          <TooltipPopup side="top">{`Un-settle ${unsettleKeys.length} threads`}</TooltipPopup>
+          <TooltipPopup side="top">{unsettleLabel}</TooltipPopup>
         </Tooltip>
       ) : null}
       {unsnoozeKeys.length > 0 && props.onUnsnoozeThreads ? (
@@ -315,7 +331,7 @@ function SidebarFoldedGroupRow(props: {
             render={
               <button
                 type="button"
-                aria-label={`Wake ${unsnoozeKeys.length} threads`}
+                aria-label={wakeLabel}
                 onClick={(event) => {
                   event.stopPropagation();
                   props.onUnsnoozeThreads?.(unsnoozeKeys);
@@ -326,7 +342,7 @@ function SidebarFoldedGroupRow(props: {
               </button>
             }
           />
-          <TooltipPopup side="top">{`Wake ${unsnoozeKeys.length} threads`}</TooltipPopup>
+          <TooltipPopup side="top">{wakeLabel}</TooltipPopup>
         </Tooltip>
       ) : null}
       {settleKeys.length > 0 && props.onSettleThreads ? (
@@ -335,7 +351,7 @@ function SidebarFoldedGroupRow(props: {
             render={
               <button
                 type="button"
-                aria-label={`Settle ${settleKeys.length} threads`}
+                aria-label={settleLabel}
                 onClick={(event) => {
                   event.stopPropagation();
                   props.onSettleThreads?.(settleKeys);
@@ -346,7 +362,7 @@ function SidebarFoldedGroupRow(props: {
               </button>
             }
           />
-          <TooltipPopup side="top">{`Settle ${settleKeys.length} threads`}</TooltipPopup>
+          <TooltipPopup side="top">{settleLabel}</TooltipPopup>
         </Tooltip>
       ) : null}
       {canSnoozeGroup && props.onSnoozeThreads && props.timestampFormat ? (
@@ -356,7 +372,9 @@ function SidebarFoldedGroupRow(props: {
           onSnooze={(preset) => props.onSnoozeThreads?.(memberKeys, preset)}
           timestampFormat={props.timestampFormat}
           environmentId={props.members[0]!.thread.environmentId}
-          label={`Snooze ${props.size} threads`}
+          label={gt("{count, plural, =1 {Snooze 1 thread} other {Snooze {count} threads}}", {
+            count: props.size,
+          })}
         />
       ) : null}
       <ChevronRightIcon aria-hidden className="ml-0.5 size-4 shrink-0 text-muted-foreground" />
@@ -369,7 +387,10 @@ function SidebarFoldedGroupRow(props: {
       role="button"
       tabIndex={0}
       data-testid="sidebar-group-folded"
-      aria-label={`Unfold ${props.name}, ${props.size} threads`}
+      aria-label={gt(
+        "{count, plural, =1 {Unfold {name}, 1 thread} other {Unfold {name}, {count} threads}}",
+        { name: props.name, count: props.size },
+      )}
       // The row the open thread would have had is folded away, so this one
       // answers for it: lit like that row, and the one the reveal scrolls to.
       aria-current={props.isActive === true ? "page" : undefined}
@@ -390,7 +411,10 @@ function SidebarFoldedGroupRow(props: {
       {slim ? (
         <>
           {pinned ? (
-            <PinIcon aria-label="Pinned" className="size-3 shrink-0 text-muted-foreground/65" />
+            <PinIcon
+              aria-label={gt("Pinned")}
+              className="size-3 shrink-0 text-muted-foreground/65"
+            />
           ) : null}
           <span className="flex shrink-0 items-center gap-0.5 opacity-40 grayscale transition-opacity group-focus-within/folded-group:opacity-100 group-focus-within/folded-group:grayscale-0 group-hover/folded-group:opacity-100 group-hover/folded-group:grayscale-0">
             {membersByProject(props.members).map((member) =>
@@ -440,7 +464,10 @@ function SidebarFoldedGroupRow(props: {
         <>
           <span className="flex h-5 min-w-0 items-center gap-1.5 text-xs">
             {pinned ? (
-              <PinIcon aria-label="Pinned" className="size-3 shrink-0 text-muted-foreground/65" />
+              <PinIcon
+                aria-label={gt("Pinned")}
+                className="size-3 shrink-0 text-muted-foreground/65"
+              />
             ) : null}
             <span className="flex shrink-0 items-center gap-0.5">
               {membersByProject(props.members).map((member) =>
@@ -450,7 +477,7 @@ function SidebarFoldedGroupRow(props: {
               )}
             </span>
             <span className="min-w-0 flex-1 truncate text-secondary-label font-medium tabular-nums">
-              {props.size} threads
+              {gt("{count, plural, =1 {1 thread} other {{count} threads}}", { count: props.size })}
             </span>
             {/* The state and the fold share one slot, as a thread's row shares its
                 own between its state and its controls: what the group is doing is
@@ -534,6 +561,7 @@ export function SidebarGroupHeader(props: {
   draggable?: boolean;
   variant: "card" | "slim";
 }) {
+  const gt = useGT();
   // The group's row is its handle: picking it up moves the whole block, the
   // way picking up a thread moves that thread.
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -570,12 +598,12 @@ export function SidebarGroupHeader(props: {
         props.onContextMenu(props.groupKey, { x: event.clientX, y: event.clientY });
       }}
     >
-      {props.isJoinTarget === true ? <SidebarJoinBadge label="Add to group" /> : null}
+      {props.isJoinTarget === true ? <SidebarJoinBadge label={gt("Add to group")} /> : null}
       {props.renaming === true ? (
         <input
           autoFocus
           defaultValue={props.name}
-          aria-label="Group name"
+          aria-label={gt("Group name")}
           data-testid="sidebar-group-rename"
           onFocus={(event) => event.currentTarget.select()}
           onBlur={(event) => {
@@ -604,7 +632,10 @@ export function SidebarGroupHeader(props: {
           onClick={() => props.onToggle(props.groupKey)}
           expanded
           tone="accent"
-          aria-label={`Fold ${props.name}, ${props.size} threads`}
+          aria-label={gt(
+            "{count, plural, =1 {Fold {name}, 1 thread} other {Fold {name}, {count} threads}}",
+            { name: props.name, count: props.size },
+          )}
           accessory={
             <span className="shrink-0 tabular-nums text-sidebar-muted-foreground/60">
               {props.size}
