@@ -424,8 +424,9 @@ function UsageLimitsHoverContent({ rows }: { readonly rows: readonly UsageLimits
               accentColor={row.accentColor}
               showBadge={Boolean(row.accentColor)}
               indicatorBackground="var(--popover)"
+              size="compact"
               className="size-4"
-              iconClassName="size-3.5 text-foreground/80"
+              iconClassName="text-foreground/80"
             />
             <span className="shrink-0 font-medium text-foreground">{row.driverLabel}</span>
             {row.instanceLabel !== row.driverLabel ? (
@@ -442,14 +443,12 @@ function UsageLimitsHoverContent({ rows }: { readonly rows: readonly UsageLimits
                 <div key={window.id} className="flex flex-col gap-1">
                   <div className="flex min-w-0 items-center gap-2 text-2xs">
                     <span className="min-w-0 truncate text-muted-foreground">{window.label}</span>
-                    <span className="ms-auto shrink-0 font-medium tabular-nums" style={{ color }}>
+                    <span className="ms-auto shrink-0 font-medium text-foreground tabular-nums">
                       {Math.round(used)}%
                     </span>
-                    {window.resetsIn ? (
-                      <span className="w-[5.75rem] shrink-0 text-right text-3xs text-muted-foreground tabular-nums">
-                        {window.resetsIn}
-                      </span>
-                    ) : null}
+                    <span className="w-[5.75rem] shrink-0 text-right text-3xs text-muted-foreground tabular-nums">
+                      {window.resetsIn}
+                    </span>
                   </div>
                   <div className="h-1 overflow-hidden rounded-full bg-muted">
                     <div
