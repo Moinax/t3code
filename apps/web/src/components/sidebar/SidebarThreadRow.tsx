@@ -88,7 +88,6 @@ import {
   useEnvironmentScopeDenied,
 } from "../../state/session";
 import { formatRelativeTime, parseTimestampDate } from "../../timestampFormat";
-import { threadTimeTimestamp } from "./threadTime.logic";
 import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
