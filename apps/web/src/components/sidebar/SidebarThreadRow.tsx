@@ -77,7 +77,6 @@ import { vcsEnvironment, vcsBranchRevalidation } from "../../state/vcs";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { formatRelativeTimeLabel, parseTimestampDate } from "../../timestampFormat";
-import { threadTimeTimestamp } from "./threadTime.logic";
 import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";

@@ -33,8 +33,7 @@ export const forkUpdate = DesktopIpc.makeIpcMethod({
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const env = yield* HostProcess.Environment;
     const repo =
-      env.T3CODE_REPO ||
-      environment.path.join(environment.homeDirectory, "Projects/labs/t3code");
+      env.T3CODE_REPO || environment.path.join(environment.homeDirectory, "Projects/labs/t3code");
     const scriptDirectory = environment.path.join(environment.homeDirectory, ".local/state/t3fork");
     const script = environment.path.join(scriptDirectory, `client-${environment.appVersion}.mjs`);
     const available =
