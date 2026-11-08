@@ -30,10 +30,9 @@ export const useForkUpdatesStore = create<ForkUpdatesState>((set, get) => ({
       set({ data, error: null, retryAt: 0 });
     } catch (error) {
       set({
-        error:
-          isGitHubRateLimitError(error)
-            ? error.message
-            : "Could not check GitHub. Check your connection and try refreshing.",
+        error: isGitHubRateLimitError(error)
+          ? error.message
+          : "Could not check GitHub. Check your connection and try refreshing.",
         retryAt: isGitHubRateLimitError(error) ? error.retryAt : 0,
       });
     } finally {
