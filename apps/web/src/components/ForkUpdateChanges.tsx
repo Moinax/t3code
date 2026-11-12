@@ -1,4 +1,6 @@
+import { T, useGT, useMessages } from "gt-react";
 import { ExternalLinkIcon } from "lucide-react";
+import ChatMarkdown from "./ChatMarkdown";
 import { groupForkChanges } from "../lib/forkChanges";
 import { upstreamCommitUrl, upstreamPullUrl } from "../lib/forkUpdates";
 import { cn } from "../lib/utils";
@@ -19,6 +21,8 @@ export function ForkUpdateChanges({
   summary?: string | undefined;
   defaultOpen?: boolean;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const groups = groupForkChanges(changes);
   if (groups.length === 0) return null;
   return (
@@ -26,17 +30,17 @@ export function ForkUpdateChanges({
       {summary && (
         <section className="space-y-1 rounded-md border border-border px-3 py-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide">
-            What matters for your fork
+            <T>What matters for your fork</T>
           </h3>
-          <p className="whitespace-pre-line text-sm">{summary}</p>
+          <ChatMarkdown text={summary} cwd={undefined} />
         </section>
       )}
       <details open={defaultOpen} className="rounded-md border border-border">
         <summary className="cursor-pointer px-3 py-2 text-sm text-muted-foreground">
-          What this update brings{" "}
+          <T>What this update brings</T>{" "}
           <span className="tabular-nums">
             {total > changes.length
-              ? `(${changes.length} of ${total})`
+              ? gt("({shown} of {total})", { shown: changes.length, total })
               : `(${total || changes.length})`}
           </span>
         </summary>
@@ -52,7 +56,7 @@ export function ForkUpdateChanges({
                   aria-hidden="true"
                   className={cn("size-1.5 shrink-0 rounded-full", group.dot)}
                 />
-                {group.label}
+                {m(group.label)}
                 <span className="font-medium normal-case tracking-normal text-muted-foreground tabular-nums">
                   {group.changes.length}
                 </span>

@@ -1,3 +1,5 @@
+import { msg } from "gt-react";
+
 /**
  * Groups the updater's `git log --format="%h %s"` subjects by their conventional-commit prefix,
  * which already says what restarting brings. Nothing is fetched; it is the same strings, sorted.
@@ -46,12 +48,35 @@ export function parseForkChange(line: string): ForkChange | null {
  * new group render undotted through a silent `undefined` instead of a type error.
  */
 const GROUPS = [
-  { key: "feature", label: "New", dot: "bg-success", open: true, types: ["feat"] },
-  { key: "fix", label: "Fixes", dot: "bg-info", open: true, types: ["fix"] },
-  { key: "revert", label: "Reverts", dot: "bg-warning", open: false, types: ["revert"] },
+  {
+    key: "feature",
+    label: msg("New", { $context: "heading for new features" }),
+    dot: "bg-success",
+    open: true,
+    types: ["feat"],
+  },
+  {
+    key: "fix",
+    label: msg("Fixes", { $context: "heading for bug fixes" }),
+    dot: "bg-info",
+    open: true,
+    types: ["fix"],
+  },
+  {
+    key: "revert",
+    label: msg("Reverts", { $context: "heading for reverted changes" }),
+    dot: "bg-warning",
+    open: false,
+    types: ["revert"],
+  },
   // Everything else, named for what it is mostly made of rather than left as
   // "other": the point of the group is that you can tell it is skippable.
-  { key: "internal", label: "Tests, CI and internals", dot: "bg-muted-foreground", open: false },
+  {
+    key: "internal",
+    label: msg("Tests, CI and internals"),
+    dot: "bg-muted-foreground",
+    open: false,
+  },
 ] as const satisfies readonly {
   key: string;
   label: string;
