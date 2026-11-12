@@ -51,6 +51,8 @@ export const ForkUpdateState = Schema.Struct({
   targetTag: Schema.optionalKey(Schema.NullOr(Schema.String)),
   changes: Schema.optionalKey(Schema.Array(Schema.String)),
   changeCount: Schema.optionalKey(Schema.Number),
+  /** An agent's briefing on which of `changes` matter to this fork; absent until it finishes. */
+  changeSummary: Schema.optionalKey(Schema.String),
 });
 export type ForkUpdateState = typeof ForkUpdateState.Type;
 export function getForkUpdatePreparedVersion(state: ForkUpdateState): string | null {
