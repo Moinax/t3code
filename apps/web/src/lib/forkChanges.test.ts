@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { groupForkChanges, parseForkChange } from "./forkChanges";
+import { m } from "../i18n/messages";
 
 describe("parseForkChange", () => {
   it("reads the type, scope, subject and pull request out of a subject line", () => {
@@ -54,7 +55,7 @@ describe("groupForkChanges", () => {
   ];
 
   it("puts what you restart for first and what you can skip last", () => {
-    expect(groupForkChanges(lines).map((group) => [group.label, group.changes.length])).toEqual([
+    expect(groupForkChanges(lines).map((group) => [m(group.label), group.changes.length])).toEqual([
       ["New", 1],
       ["Fixes", 1],
       ["Reverts", 1],
