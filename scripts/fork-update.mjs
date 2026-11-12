@@ -90,12 +90,19 @@ export function saveState(config, state) {
   const temp = `${file}.${NodeCrypto.randomUUID()}`;
   NodeFS.writeFileSync(temp, JSON.stringify({ ...state, updatedAt: Date.now() }), { mode: 0o600 });
   NodeFS.renameSync(temp, file);
-  if (state.stage === "ready") savePreparedUpdate(config, state);
+  if (state.stage !== "ready") return;
+  savePreparedUpdate(config, state);
+  // A local build replaces prepared.json and brings no upstream changes of its own, so the
+  // last upstream update's list and briefing are kept apart until the next one replaces them.
+  if (state.source !== "local") writeJson(config, "upstream.json", state);
 }
 function savePreparedUpdate(config, state) {
-  const file = NodePath.join(config.stateDir, "prepared.json");
+  writeJson(config, "prepared.json", state);
+}
+function writeJson(config, name, data) {
+  const file = NodePath.join(config.stateDir, name);
   const temp = `${file}.${NodeCrypto.randomUUID()}`;
-  NodeFS.writeFileSync(temp, JSON.stringify(state), { mode: 0o600 });
+  NodeFS.writeFileSync(temp, JSON.stringify(data), { mode: 0o600 });
   NodeFS.renameSync(temp, file);
 }
 // Each run's work directory costs gigabytes and is dead once its update is
@@ -290,6 +297,13 @@ export async function status(config) {
   }
   const prepared = await readPreparedUpdate(config);
   const rollback = await readRollback(config);
+  const lastUpstream = await NodeFSP.readFile(
+    NodePath.join(config.stateDir, "upstream.json"),
+    "utf8",
+  )
+    .then(JSON.parse)
+    .catch(() => null);
+  const brief = [state, prepared, lastUpstream].find((source) => source?.changes?.length);
   if (state.stage === "ready" && !prepared) {
     const invalid = {
       ...state,
@@ -312,10 +326,10 @@ export async function status(config) {
     localClean: await localClean(config),
     unpublishedCommits: await unpublishedCommits(config),
     runningIsHead: await runningIsHead(config),
-    targetTag: state.targetTag ?? prepared?.targetTag ?? null,
-    changes: state.changes?.length ? state.changes : (prepared?.changes ?? []),
-    changeSummary: state.changes?.length ? state.changeSummary : prepared?.changeSummary,
-    changeCount: state.changeCount || (prepared?.changeCount ?? 0),
+    targetTag: state.targetTag ?? prepared?.targetTag ?? lastUpstream?.targetTag ?? null,
+    changes: brief?.changes ?? [],
+    changeSummary: brief?.changeSummary,
+    changeCount: brief?.changeCount || (brief?.changes.length ?? 0),
     ...(prepared
       ? { preparedVersion: prepared.version, preparedSource: prepared.source ?? "upstream" }
       : {}),
