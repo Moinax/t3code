@@ -926,6 +926,33 @@ NodeTest.test("a rollback puts the previous build back and forgets what it repla
   NodeAssert.equal(await readRollback(config), null);
 });
 
+NodeTest.test("a local build keeps the last upstream update's briefing", async (t) => {
+  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3fork-brief-"));
+  t.after(() => NodeFSP.rm(root, { recursive: true, force: true }));
+  const config = { stateDir: NodePath.join(root, "state"), target: NodePath.join(root, "app") };
+  await NodeFSP.mkdir(config.stateDir);
+  await NodeFSP.writeFile(config.target, "app");
+  const installed = await NodeFSP.stat(config.target);
+  const ready = {
+    stage: "ready",
+    installedSize: installed.size,
+    installedMtimeMs: installed.mtimeMs,
+  };
+  saveState(config, {
+    ...ready,
+    source: "upstream",
+    targetTag: "v1",
+    changes: ["abc upstream"],
+    changeCount: 1,
+    changeSummary: "- matters",
+  });
+  saveState(config, { ...ready, source: "local", targetTag: null, changes: [], changeCount: 0 });
+  const result = await status(config);
+  NodeAssert.deepEqual(result.changes, ["abc upstream"]);
+  NodeAssert.equal(result.changeSummary, "- matters");
+  NodeAssert.equal(result.targetTag, "v1");
+});
+
 NodeTest.test("a half-written rollback label never takes the updater down with it", async (t) => {
   const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3fork-label-"));
   t.after(() => NodeFSP.rm(root, { recursive: true, force: true }));
