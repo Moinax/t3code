@@ -1,4 +1,5 @@
 import { ExternalLinkIcon } from "lucide-react";
+import ChatMarkdown from "./ChatMarkdown";
 import { groupForkChanges } from "../lib/forkChanges";
 import { upstreamCommitUrl, upstreamPullUrl } from "../lib/forkUpdates";
 import { cn } from "../lib/utils";
@@ -28,7 +29,7 @@ export function ForkUpdateChanges({
           <h3 className="text-xs font-semibold uppercase tracking-wide">
             What matters for your fork
           </h3>
-          <p className="whitespace-pre-line text-sm">{summary}</p>
+          <ChatMarkdown text={summary} cwd={undefined} />
         </section>
       )}
       <details open={defaultOpen} className="rounded-md border border-border">
