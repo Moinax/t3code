@@ -162,6 +162,8 @@ async function fixture(t, conflict = false) {
     tools: {
       vp: "vp",
       claude: "claude",
+      summarizeChanges: async (_claude, changes, forkPatches) =>
+        `- ${changes.length} change(s) against ${forkPatches.join(", ")}`,
       resolveNightly: async () => ({
         commit: upstreamHead,
         tag: "v0.1.1-nightly.20261020.3401",
@@ -177,6 +179,8 @@ NodeTest.test(
     const f = await fixture(t);
     await prepareUpdate(f.config, f.run, f.report, f.tools);
     NodeAssert.equal(f.state().stage, "ready");
+    // Judged against the fork's own patches only, never the upstream commits under them.
+    NodeAssert.equal(f.state().changeSummary, "- 1 change(s) against custom fork behavior");
     NodeAssert.ok(f.stages.indexOf("checking") < f.stages.indexOf("building"));
     NodeAssert.ok(f.stages.indexOf("building") < f.stages.indexOf("publishing"));
     NodeAssert.ok(f.stages.indexOf("publishing") < f.stages.indexOf("installing"));
