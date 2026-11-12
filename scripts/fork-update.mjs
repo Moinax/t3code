@@ -314,6 +314,7 @@ export async function status(config) {
     runningIsHead: await runningIsHead(config),
     targetTag: state.targetTag ?? prepared?.targetTag ?? null,
     changes: state.changes?.length ? state.changes : (prepared?.changes ?? []),
+    changeSummary: state.changes?.length ? state.changeSummary : prepared?.changeSummary,
     changeCount: state.changeCount || (prepared?.changeCount ?? 0),
     ...(prepared
       ? { preparedVersion: prepared.version, preparedSource: prepared.source ?? "upstream" }
@@ -620,6 +621,18 @@ export async function prepareUpdate(config, run, report, tools) {
     });
     return;
   }
+  // Before the rebase rewrites them: `upstream..original` is exactly the fork's own patches.
+  const forkPatches = (
+    await git(["log", "--no-merges", "--format=%s", "--max-count=200", `${upstream}..${original}`])
+  )
+    .split("\n")
+    .filter(Boolean);
+  // Runs beside the rebase and build, and a failed summary never fails the update.
+  const summary = changes.length
+    ? (tools.summarizeChanges ?? summarizeChanges)(tools.claude, changes, forkPatches)
+        .then((changeSummary) => changeSummary && report({ changeSummary }))
+        .catch(() => {})
+    : Promise.resolve();
   let attempt = 0;
   // Only a backstop against a repair loop: each attempt sees the previous one's work.
   const maxRepairs = 10;
@@ -751,6 +764,7 @@ export async function prepareUpdate(config, run, report, tools) {
     );
   }
   report({ stage: "installing", message: "Installing the prepared AppImage…" });
+  await summary;
   await installArtifact(artifact, config.target, config.backup);
   const installed = await NodeFSP.stat(config.target);
   report({
@@ -940,6 +954,34 @@ export const forkBuildCommit = (version) => version?.match(/-moinax\.([a-f0-9]+)
  * commits are left out: a rebase rewrites them all, and the list is only ever read for upstream.
  * Capped, and empty when it cannot answer; never worth failing an install.
  */
+/** A short briefing on which upstream changes matter to this fork, judged by its own patches. */
+export async function summarizeChanges(claude, changes, forkPatches) {
+  const { stdout } = await exec(
+    claude,
+    [
+      "--print",
+      "--model",
+      "claude-sonnet-5-5",
+      "--effort",
+      "low",
+      "--tools",
+      "",
+      "--no-session-persistence",
+      `You brief the owner of a personal fork of T3 Code (a GUI for coding agents) on an upstream update they are about to restart into. They run the Linux desktop app daily.
+
+Their own fork patches, newest first, show what they use and care about:
+${forkPatches.join("\n")}
+
+The upstream commits this update brings, as "<sha> <subject>":
+${changes.join("\n")}
+
+Write at most 5 bullet points, each one line starting with "- ", on the changes most likely to matter to them: ones touching the areas their patches touch, behavior they will notice day to day, and anything that could overlap, conflict with or make one of their patches redundant. Name the PR number when there is one. Skip tests, CI and internals. Plain text only: no heading, no intro, no closing line. If nothing stands out, write one line saying so.`,
+    ],
+    { timeout: 180_000, maxBuffer: 1024 * 1024 },
+  );
+  return stdout.trim() || null;
+}
+
 export async function upstreamChangesSince(config, since, commit) {
   if (!since) return [];
   const git = (args) =>

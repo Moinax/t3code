@@ -74,6 +74,7 @@ export function ForkMaintenancePanel() {
       <ForkUpdateChanges
         changes={state.changes ?? []}
         total={state.changeCount ?? 0}
+        summary={state.changeSummary}
         // The two moments the question is actually being asked: deciding whether
         // to restart, and having just restarted into it.
         defaultOpen={ready || current}
