@@ -243,7 +243,7 @@ function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
   const summary = summarizeForkUpdates({
     job: maintenance.state,
     updates: data ? { count: data.count, nightly: data.nightly } : null,
-    checkFailed: !!error || !!maintenance.error,
+    checkError: error ?? maintenance.error,
     loading,
   });
   return (

@@ -20,10 +20,10 @@ export function summarizeForkUpdates(input: {
     count: number;
     nightly: { tag: string; eligibleAt: number | null };
   } | null;
-  readonly checkFailed: boolean;
+  readonly checkError: string | null;
   readonly loading: boolean;
 }): ForkUpdateSummary {
-  const { job, updates, checkFailed, loading } = input;
+  const { job, updates, checkError, loading } = input;
   const running = job ? isForkUpdateRunning(job.stage) : false;
   const preparedVersion = job ? getForkUpdatePreparedVersion(job) : null;
   const ready = !running && !!preparedVersion && preparedVersion !== job?.runningVersion;
@@ -40,9 +40,9 @@ export function summarizeForkUpdates(input: {
     };
   if (failed)
     return { label: "Fork update needs attention", badge: "!", tone: "warning", running: false };
-  if (checkFailed)
+  if (checkError)
     return {
-      label: `Fork updates: check failed${updates ? `, last count ${updates.count}` : ""}`,
+      label: `Fork updates: ${checkError}${updates ? ` Last count: ${updates.count}.` : ""}`,
       badge: "!",
       tone: "warning",
       running: false,
