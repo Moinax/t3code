@@ -28,7 +28,9 @@ const commit = (index: number) => ({
 });
 const comparison = (count: number, commits: unknown[]) => ({
   total_commits: count,
-  permalink_url: "https://github.com/Moinax/t3code/compare/Moinax:abc1234...pingdotgg:def5678",
+  // GitHub's permalink abbreviates both SHAs, and the API answers 404 to that form.
+  permalink_url: "https://github.com/Moinax/t3code/compare/Moinax:aaaaaaa...pingdotgg:4444444",
+  base_commit: { sha: "a".repeat(40) },
   commits,
 });
 
@@ -58,7 +60,7 @@ describe("fetchForkUpdates", () => {
     expect(result.commits[263]?.sha).toBe(commit(0).sha);
     expect(fetch.mock.calls[0]?.[0]).toContain("/releases?");
     expect(fetch.mock.calls[2]?.[0]).toContain(
-      "Moinax:abc1234...pingdotgg:def5678?per_page=100&page=2",
+      `Moinax:${"a".repeat(40)}...pingdotgg:${"4".repeat(40)}?per_page=100&page=2`,
     );
     expect(fetch.mock.calls[3]?.[0]).toContain("page=3");
   });

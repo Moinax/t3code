@@ -142,7 +142,7 @@ const GitHubCommit = Schema.Struct({
 });
 const GitHubComparison = Schema.Struct({
   total_commits: Schema.Number,
-  permalink_url: Schema.String,
+  base_commit: Schema.Struct({ sha: Schema.String }),
   commits: Schema.Array(GitHubCommit),
 });
 
@@ -208,12 +208,15 @@ export async function fetchForkUpdates(): Promise<ForkUpdates> {
   const nightly = selectNightly(decodeReleases(await read(API_RELEASES_URL)));
   if (!nightly) throw new Error("Upstream has published no built nightly release to follow.");
   const first = await readPage(`moinax...pingdotgg:${nightly.commit}`, 1);
-  const pinnedComparison = first.permalink_url.match(
-    /^https:\/\/github\.com\/Moinax\/t3code\/compare\/(Moinax:[a-f0-9]+\.\.\.pingdotgg:[a-f0-9]+)$/i,
-  )?.[1];
-  if (!pinnedComparison || !Number.isSafeInteger(first.total_commits) || first.total_commits < 0) {
+  // Full SHAs: the API answers 404 to the abbreviated ones in GitHub's `permalink_url`.
+  if (
+    !/^[0-9a-f]{40}$/.test(first.base_commit.sha) ||
+    !Number.isSafeInteger(first.total_commits) ||
+    first.total_commits < 0
+  ) {
     throw new Error("GitHub returned an invalid fork comparison.");
   }
+  const pinnedComparison = `Moinax:${first.base_commit.sha}...pingdotgg:${nightly.commit}`;
   const commits = [...first.commits];
   for (let page = 2; commits.length < first.total_commits; page += 1) {
     const next = await readPage(pinnedComparison, page);
