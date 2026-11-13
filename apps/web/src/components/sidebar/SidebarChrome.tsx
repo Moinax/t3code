@@ -7,7 +7,7 @@ import {
   SettingsIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { T, useGT } from "gt-react";
+import { T, useGT, useMessages } from "gt-react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
@@ -247,12 +247,16 @@ function SidebarUtilityItem({
 function ForkUpdatesUtilityItem({ onClick }: { onClick: () => void }) {
   const { data, error, loading } = useForkUpdates();
   const maintenance = useForkMaintenance();
-  const summary = summarizeForkUpdates({
-    job: maintenance.state,
-    updates: data ? { count: data.count, nightly: data.nightly } : null,
-    checkFailed: !!error || !!maintenance.error,
-    loading,
-  });
+  const messages = useMessages();
+  const summary = summarizeForkUpdates(
+    {
+      job: maintenance.state,
+      updates: data ? { count: data.count, nightly: data.nightly } : null,
+      checkError: error ?? maintenance.error,
+      loading,
+    },
+    messages,
+  );
   return (
     <SidebarUtilityItem
       label={summary.label}
