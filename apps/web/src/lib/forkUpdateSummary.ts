@@ -1,5 +1,7 @@
 import { getForkUpdatePreparedVersion, isForkUpdateRunning } from "@t3tools/contracts";
 import type { ForkUpdateState } from "@t3tools/contracts";
+import { msg } from "gt-react";
+import { m, type MessageResolver } from "../i18n/messages";
 import { nextNightlyPhrase } from "./forkUpdates";
 
 export interface ForkUpdateSummary {
@@ -14,42 +16,65 @@ export interface ForkUpdateSummary {
  * What the sidebar's fork item says and whether it wears a badge, decided once so label and
  * badge cannot disagree. The usual quiet state shows nothing: an always-on badge goes unread.
  */
-export function summarizeForkUpdates(input: {
-  readonly job: ForkUpdateState | null;
-  readonly updates: {
-    count: number;
-    nightly: { tag: string; eligibleAt: number | null };
-  } | null;
-  readonly checkFailed: boolean;
-  readonly loading: boolean;
-}): ForkUpdateSummary {
-  const { job, updates, checkFailed, loading } = input;
+export function summarizeForkUpdates(
+  input: {
+    readonly job: ForkUpdateState | null;
+    readonly updates: {
+      count: number;
+      nightly: { tag: string; eligibleAt: number | null };
+    } | null;
+    readonly checkError: string | null;
+    readonly loading: boolean;
+  },
+  resolve: MessageResolver = m,
+): ForkUpdateSummary {
+  const { job, updates, checkError, loading } = input;
   const running = job ? isForkUpdateRunning(job.stage) : false;
   const preparedVersion = job ? getForkUpdatePreparedVersion(job) : null;
   const ready = !running && !!preparedVersion && preparedVersion !== job?.runningVersion;
   const failed = job?.stage === "error";
 
   if (running)
-    return { label: `Fork update: ${job?.message}`, badge: null, tone: "success", running: true };
+    return {
+      label: resolve(msg("Fork update: {message}", { message: job?.message ?? "" })),
+      badge: null,
+      tone: "success",
+      running: true,
+    };
   if (ready)
     return {
-      label: `${job?.preparedSource === "local" ? "Local build" : "Fork update"} ready: restart from Fork updates`,
+      label:
+        job?.preparedSource === "local"
+          ? resolve(msg("Local build ready: restart from Fork updates"))
+          : resolve(msg("Fork update ready: restart from Fork updates")),
       badge: "✓",
       tone: "success",
       running: false,
     };
   if (failed)
-    return { label: "Fork update needs attention", badge: "!", tone: "warning", running: false };
-  if (checkFailed)
     return {
-      label: `Fork updates: check failed${updates ? `, last count ${updates.count}` : ""}`,
+      label: resolve(msg("Fork update needs attention")),
+      badge: "!",
+      tone: "warning",
+      running: false,
+    };
+  if (checkError)
+    return {
+      label: updates
+        ? resolve(
+            msg("Fork updates: {error} Last count: {count}.", {
+              error: checkError,
+              count: updates.count,
+            }),
+          )
+        : resolve(msg("Fork updates: {error}", { error: checkError })),
       badge: "!",
       tone: "warning",
       running: false,
     };
   if (!updates)
     return {
-      label: loading ? "Fork updates: checking GitHub" : "Fork updates",
+      label: loading ? resolve(msg("Fork updates: checking GitHub")) : resolve(msg("Fork updates")),
       badge: null,
       tone: "success",
       running: false,
@@ -61,14 +86,29 @@ export function summarizeForkUpdates(input: {
       // rather than reporting "up to date" over a fork nothing will update.
       label:
         job?.localClean === true
-          ? `Fork updates: ${updates.count} upstream commits missing`
-          : `Fork updates: ${updates.count} upstream commits waiting (the checkout has uncommitted changes)`,
+          ? resolve(
+              msg(
+                "{count, plural, one {Fork updates: {count} upstream commit missing} other {Fork updates: {count} upstream commits missing}}",
+                { count: updates.count },
+              ),
+            )
+          : resolve(
+              msg(
+                "{count, plural, one {Fork updates: {count} upstream commit waiting (the checkout has uncommitted changes)} other {Fork updates: {count} upstream commits waiting (the checkout has uncommitted changes)}}",
+                { count: updates.count },
+              ),
+            ),
       badge: updates.count > 999 ? "999+" : String(updates.count),
       tone: "warning",
       running: false,
     };
   return {
-    label: `Fork is up to date · following ${updates.nightly.tag} · ${nextNightlyPhrase(updates.nightly.eligibleAt)}`,
+    label: resolve(
+      msg("Fork is up to date · following {tag} · {next}", {
+        tag: updates.nightly.tag,
+        next: nextNightlyPhrase(updates.nightly.eligibleAt),
+      }),
+    ),
     badge: null,
     tone: "success",
     running: false,

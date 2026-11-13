@@ -1,6 +1,8 @@
+import { msg } from "gt-react";
 import { useEffect } from "react";
 import { create } from "zustand";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
+import { m } from "../i18n/messages";
 import { fetchForkUpdates, isGitHubRateLimitError, type ForkUpdates } from "../lib/forkUpdates";
 
 const REFRESH_INTERVAL_MS = 15 * 60_000;
@@ -29,10 +31,17 @@ export const useForkUpdatesStore = create<ForkUpdatesState>((set, get) => ({
       const data = await fetchForkUpdates();
       set({ data, error: null, retryAt: 0 });
     } catch (error) {
+      console.warn("Fork updates: GitHub check failed.", error);
+      // First line only: a Schema decode failure carries a multi-line tree.
+      const cause = (error instanceof Error ? error.message : String(error)).split("\n")[0];
       set({
         error: isGitHubRateLimitError(error)
           ? error.message
-          : "Could not check GitHub. Check your connection and try refreshing.",
+          : m(
+              msg("Could not check GitHub ({cause}). Check your connection and try refreshing.", {
+                cause: cause?.replace(/\.$/, "") ?? "",
+              }),
+            ),
         retryAt: isGitHubRateLimitError(error) ? error.retryAt : 0,
       });
     } finally {

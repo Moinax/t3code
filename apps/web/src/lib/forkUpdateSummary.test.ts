@@ -21,7 +21,7 @@ const updates = {
   nightly: { tag: "v0.1.1-nightly.20261020.3411", eligibleAt: null },
 };
 const summarize = (overrides: Partial<Parameters<typeof summarizeForkUpdates>[0]> = {}) =>
-  summarizeForkUpdates({ job, updates, checkFailed: false, loading: false, ...overrides });
+  summarizeForkUpdates({ job, updates, checkError: null, loading: false, ...overrides });
 
 describe("summarizeForkUpdates", () => {
   it("says nothing with a badge when the fork is level with the nightly it follows", () => {
@@ -76,9 +76,12 @@ describe("summarizeForkUpdates", () => {
 
   it("caps the count and reports a failed check without losing the last one", () => {
     expect(summarize({ updates: { ...updates, count: 1500 } }).badge).toBe("999+");
-    expect(summarize({ checkFailed: true, updates: { ...updates, count: 7 } }).label).toContain(
-      "last count 7",
-    );
+    expect(
+      summarize({
+        checkError: "Could not check GitHub (GitHub answered HTTP 502).",
+        updates: { ...updates, count: 7 },
+      }).label,
+    ).toBe("Fork updates: Could not check GitHub (GitHub answered HTTP 502). Last count: 7.");
     expect(summarize({ updates: null, loading: true }).label).toContain("checking GitHub");
     expect(summarize({ updates: null, loading: false }).badge).toBe(null);
   });

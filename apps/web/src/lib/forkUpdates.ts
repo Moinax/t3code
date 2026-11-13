@@ -193,7 +193,7 @@ export async function fetchForkUpdates(): Promise<ForkUpdates> {
             retryAfter > 0 ? Date.now() + retryAfter * 1000 : Math.max(reset, Date.now() + 60_000),
         });
       }
-      throw new Error(`GitHub could not check the fork (HTTP ${response.status}).`);
+      throw new Error(`GitHub answered HTTP ${response.status}.`);
     }
     return response.json();
   };
