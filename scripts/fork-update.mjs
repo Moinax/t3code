@@ -989,7 +989,15 @@ ${forkPatches.join("\n")}
 The upstream commits this update brings, as "<sha> <subject>":
 ${changes.join("\n")}
 
-Write at most 5 bullet points, each one line starting with "- ", on the changes most likely to matter to them: ones touching the areas their patches touch, behavior they will notice day to day, and anything that could overlap, conflict with or make one of their patches redundant. Name the PR number when there is one. Skip tests, CI and internals. Markdown is rendered; no heading, no intro, no closing line. If nothing stands out, write one line saying so.`,
+Write a short, friendly digest of what is new for them, like release notes written for one reader. Pick only what is worth knowing: new features they will notice, fixes to things they use, and anything that overlaps, conflicts with or makes one of their patches redundant. Skip tests, CI, refactors and internals.
+
+Format, rendered as markdown:
+- Group under up to three \`###\` headings, each starting with an emoji: new features (✨), fixes (🛠️), and things to check against their patches (⚠️). Leave out a group with nothing in it.
+- Under each, 1 to 3 bullets: a **bold short title**, then one plain sentence on what it means for them.
+- Never cite PR numbers, commit hashes or other ids; describe the change in plain words.
+- No intro, no closing line, at most 8 bullets in total.
+
+If nothing stands out, write one line saying so.`,
     ],
     { timeout: 180_000, maxBuffer: 1024 * 1024 },
   );
