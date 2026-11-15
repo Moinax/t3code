@@ -3561,6 +3561,8 @@ export const OrchestrationV2Command = Schema.Union([
         repositoryWebUrl: Schema.optional(TrimmedNonEmptyString),
       }),
     ),
+    /** A read already shown to the agent; a new watch reports only what differs from it. */
+    baseline: Schema.optional(ThreadPullRequestWatch),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.sync"),

@@ -5,15 +5,20 @@ import {
   type PullRequestChecksState,
   type PullRequestUnavailableError,
   type PullRequestWatchUntil,
+  type ThreadPullRequestWatch,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import { evaluatePullRequestWatch } from "../orchestration-v2/pullRequestWatch.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 import {
   resolveTarget,
@@ -67,7 +72,7 @@ export class PullRequestWatchService extends Context.Service<
         readonly wasWatching: boolean;
         /** Set when the PR already ended, so no watch was registered. */
         readonly state?: "merged" | "closed";
-        /** CI as the start read saw it. Checks that already passed never wake the watch. */
+        /** CI as the start read saw it. Checks that already finished never wake the watch. */
         readonly checksState?: PullRequestChecksState;
       },
       | PullRequestWatchFailedError
@@ -78,6 +83,18 @@ export class PullRequestWatchService extends Context.Service<
     >;
   }
 >()("t3/pullRequest/PullRequestWatchService") {}
+
+// A failure outranks pending checks: the watch already recorded it, so it will not wake for it.
+const baselineChecks = (watch: ThreadPullRequestWatch | undefined) =>
+  watch === undefined || watch.awaitingBaseline === "checks"
+    ? undefined
+    : watch.passed
+      ? ("passing" as const)
+      : watch.failedChecks.length > 0
+        ? ("failing" as const)
+        : watch.checksPending
+          ? ("pending" as const)
+          : undefined;
 
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
@@ -127,31 +144,47 @@ const make = Effect.gen(function* () {
     });
     // A closed snapshot still gets a read below, since the PR may have reopened.
     if (watching && before?.snapshot?.state === "merged") return alreadyEnded("merged");
-    // A pending rollup has no failure yet, so any failure the first read finds is news.
-    let checksPendingAtStart: boolean | undefined;
-    let checksStateAtStart: PullRequestChecksState | undefined;
+    // This read is the watch's baseline and the agent is shown it, so checks finishing between
+    // the agent's own look and the watch's first read still wake it.
+    let baseline: ThreadPullRequestWatch | undefined;
     if (watching && !wasWatching) {
-      const read = yield* pullRequests
-        .summary(
+      const reference = {
+        projectId: thread.projectId,
+        host: target.host,
+        repository: target.repository,
+        number: target.number,
+      };
+      yield* pullRequests.invalidate({ reference });
+      const detail = yield* pullRequests.detail({ ...reference, allowStale: false }).pipe(
+        Effect.asSome,
+        Effect.catchTags({
+          // Host and transport errors can recover while the watch is active.
+          PullRequestOperationError: () => Effect.succeedNone,
+        }),
+      );
+      if (Option.isSome(detail)) {
+        const { state } = detail.value;
+        if (state === "merged" || state === "closed") return alreadyEnded(state);
+        const now = yield* Clock.currentTimeMillis;
+        const startedAt = DateTime.formatIso(DateTime.makeUnsafe(now));
+        baseline = evaluatePullRequestWatch(
           {
-            projectId: thread.projectId,
-            host: target.host,
-            repository: target.repository,
-            number: target.number,
-            allowStale: false,
+            startedAt,
+            headSha: null,
+            failedChecks: [],
+            passed: false,
+            passedChecks: [],
+            conflicting: false,
+            awaitingBaseline: "all",
+            remarksThrough: startedAt,
+            remarkIds: [],
+            wakes: 0,
           },
-          { recoverTransientFailure: false, bypassCache: true },
-        )
-        .pipe(
-          Effect.catchTags({
-            // Host and transport errors can recover while the watch is active.
-            // A failed read leaves the seed to the link's last sync.
-            PullRequestOperationError: () => Effect.undefined,
-          }),
-        );
-      if (read?.state === "merged" || read?.state === "closed") return alreadyEnded(read.state);
-      checksPendingAtStart = read === undefined ? undefined : read.checksState === "pending";
-      checksStateAtStart = read?.checksState ?? undefined;
+          detail.value,
+          null,
+          now,
+        ).next;
+      }
     }
     const uuid = yield* random.uuidV4().pipe(Effect.orDie);
     yield* engine
@@ -165,9 +198,7 @@ const make = Effect.gen(function* () {
         watching,
         ...(watching ? { link: { url: target.url, source: "agent" as const } } : {}),
         ...(watching && input.until !== undefined && { until: input.until }),
-        ...(watching && checksPendingAtStart !== undefined
-          ? { checksPending: checksPendingAtStart }
-          : {}),
+        ...(baseline === undefined ? {} : { baseline }),
       })
       .pipe(
         Effect.catchCause((cause) =>
@@ -177,11 +208,12 @@ const make = Effect.gen(function* () {
         ),
       );
     const after = yield* requireThread(thread.id);
+    const checksState = baselineChecks(baseline);
     return {
       ...target,
       watching: watchedLink(after)?.watch !== undefined,
       wasWatching,
-      ...(checksStateAtStart !== undefined && { checksState: checksStateAtStart }),
+      ...(checksState === undefined ? {} : { checksState }),
     };
   });
 

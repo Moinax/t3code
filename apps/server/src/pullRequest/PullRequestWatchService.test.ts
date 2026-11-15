@@ -4,19 +4,21 @@ import {
   ThreadId,
   PullRequestOperationError,
   PullRequestUnavailableError,
-  type PullRequestSummary,
+  type PullRequestCheck,
+  type PullRequestDetail,
   type OrchestrationV2ServerCommand as OrchestrationCommand,
   type OrchestrationProjectShell,
   type ThreadPullRequestLink,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import { evaluatePullRequestWatch } from "../orchestration-v2/pullRequestWatch.ts";
 import {
   type PullRequestTestThread,
   v2PullRequestThread,
@@ -111,9 +113,21 @@ interface HarnessOptions {
   readonly thread?: PullRequestTestThread | null;
   readonly project?: OrchestrationProjectShell | null;
   readonly readFailure?: PullRequestService.PullRequestError;
-  readonly readState?: PullRequestSummary["state"];
-  readonly readChecksState?: PullRequestSummary["checksState"];
+  readonly readState?: PullRequestDetail["state"];
+  readonly readChecks?: ReadonlyArray<PullRequestCheck>;
 }
+
+const pullRequestDetail = (
+  checks: ReadonlyArray<PullRequestCheck>,
+  state: PullRequestDetail["state"] = "open",
+): PullRequestDetail =>
+  ({
+    state,
+    headSha: "abc123",
+    checks,
+    mergeability: "mergeable",
+    capabilities: {},
+  }) as PullRequestDetail;
 
 const makeHarness = Effect.fn("makePullRequestWatchHarness")(function* (
   options: HarnessOptions = {},
@@ -132,22 +146,11 @@ const makeHarness = Effect.fn("makePullRequestWatchHarness")(function* (
     }),
     Layer.mock(PullRequestService.PullRequestService)({
       addressedProject: () => Effect.succeed(project ?? undefined),
-      summary: (input) =>
+      invalidate: () => Effect.void,
+      detail: () =>
         options.readFailure !== undefined
           ? Effect.fail(options.readFailure)
-          : Effect.succeed({
-              ...input,
-              provider: SourceControlProviderKind.make("github"),
-              title: "Pull request",
-              url: `https://github.com/${input.repository}/pull/${input.number}`,
-              state: options.readState ?? "open",
-              ...(options.readChecksState !== undefined && {
-                checksState: options.readChecksState,
-              }),
-              headBranch: "feature",
-              baseBranch: "main",
-              updatedAt: "2026-08-20T00:00:00.000Z",
-            }),
+          : Effect.succeed(pullRequestDetail(options.readChecks ?? [], options.readState)),
     }),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
   );
@@ -164,10 +167,12 @@ const makeHarness = Effect.fn("makePullRequestWatchHarness")(function* (
 describe("PullRequestWatchService", () => {
   it.effect("links an unlinked watch even while the host has a transient read failure", () =>
     Effect.gen(function* () {
+      const ci = { name: "ci", description: null, url: null, required: true } as const;
       const cases: ReadonlyArray<readonly [HarnessOptions, boolean | undefined]> = [
-        [{ readChecksState: "pending" }, true],
-        [{ readChecksState: "failing" }, false],
-        [{}, false],
+        [{ readChecks: [{ ...ci, status: "pending" }] }, true],
+        [{ readChecks: [{ ...ci, status: "failure" }] }, false],
+        // No checks yet: the watch waits for CI to register.
+        [{}, true],
         [
           {
             readFailure: new PullRequestOperationError({
@@ -194,21 +199,36 @@ describe("PullRequestWatchService", () => {
           },
         ]);
         const [command] = commands;
-        expect(command?.type === "thread.pull-request.watch" ? command.checksPending : null).toBe(
-          checksPending,
-        );
+        // The watch's own read seeds whether CI was pending at the start.
+        expect(
+          command?.type === "thread.pull-request.watch" ? command.baseline?.checksPending : null,
+        ).toBe(checksPending);
       }
     }),
   );
 
-  it.effect("tells the caller when the checks already passed, since no wake will report it", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness({ readChecksState: "passing" });
-      const result = yield* harness.setWatching(true, {
-        url: "https://github.com/t3tools/t3code/pull/9",
-      });
-      expect(result).toMatchObject({ wasWatching: false, checksState: "passing" });
-    }),
+  it.effect(
+    "starts a new watch from the checks it reports, so ones finishing later still wake",
+    () =>
+      Effect.gen(function* () {
+        const ci = { name: "ci", description: null, url: null, required: true } as const;
+        const target = { repository: "t3tools/t3code", number: 9 };
+        const running = yield* makeHarness({ readChecks: [{ ...ci, status: "pending" }] });
+        expect((yield* running.setWatching(true, target)).checksState).toBe("pending");
+        const [command] = yield* Ref.get(running.commands);
+        assert(command?.type === "thread.pull-request.watch" && command.baseline !== undefined);
+        const green = pullRequestDetail([{ ...ci, status: "success" }]);
+        const later = Date.parse(command.baseline.startedAt) + 60_000;
+        expect(evaluatePullRequestWatch(command.baseline, green, null, later).changes).toEqual([
+          { kind: "checks-passed", count: 1, required: true },
+        ]);
+
+        const passed = yield* makeHarness({ readChecks: [{ ...ci, status: "success" }] });
+        expect(yield* passed.setWatching(true, target)).toMatchObject({
+          wasWatching: false,
+          checksState: "passing",
+        });
+      }),
   );
 
   it.effect("reports a missing hosting CLI before saving a watch and still allows unwatch", () =>
