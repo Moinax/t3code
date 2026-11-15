@@ -237,6 +237,18 @@ it.effect(
       for (const status of ["preparing", "starting", "running", "waiting"] as const) {
         yield* createRun(yield* createThread(status), status);
       }
+      const delegating = Effect.fn(function* (name: string, childStatus: "running" | "completed") {
+        const parent = yield* createThread(name);
+        yield* createRun(parent);
+        const lineage = { parentThreadId: parent, relationshipToParent: "subagent" as const };
+        const child = yield* createThread(`${name}-child`, {
+          lineage: { ...lineage, rootThreadId: parent },
+        });
+        yield* createRun(child, childStatus);
+        return [parent, child] as const;
+      });
+      const [working] = yield* delegating("delegating-working", "running");
+      const [delegated, delegatedChild] = yield* delegating("delegating-finished", "completed");
       const queued = yield* createThread("queued");
       yield* createRun(queued, "queued");
       const blocked = yield* createThread("blocked");
@@ -330,12 +342,24 @@ it.effect(
       );
       assert.deepEqual(
         new Set(eligible.map((thread) => thread.id)),
-        new Set([idle, completed, queued, woke, background, persistent, rolledBack]),
+        new Set([
+          idle,
+          completed,
+          queued,
+          woke,
+          background,
+          persistent,
+          rolledBack,
+          delegated,
+          delegatedChild,
+        ]),
       );
       assert.deepEqual(
         new Set(eligible.map((thread) => thread.id)),
         new Set(
           shell.threads
+            // Only the store reads lineage: it waits for a working child.
+            .filter((thread) => thread.id !== working)
             .filter((thread) => isAutoSettlementCandidate(thread, DateTime.toEpochMillis(now)))
             .map((thread) => thread.id),
         ),

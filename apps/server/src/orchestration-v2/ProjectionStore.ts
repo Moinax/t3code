@@ -9063,6 +9063,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, ProjectionStoreService
                 WHERE active.thread_id = t.thread_id
                   AND active.status IN ('preparing', 'starting', 'running', 'waiting')
               )
+              -- A child still working reports back here, and a settled parent cascades onto it.
+              -- Uncorrelated and runs-first: per-row lookups by parent scan every thread.
+              AND t.thread_id NOT IN (
+                SELECT json_extract(child.payload_json, '$.lineage.parentThreadId')
+                FROM orchestration_v2_projection_runs active
+                CROSS JOIN orchestration_v2_projection_threads child
+                  ON child.thread_id = active.thread_id
+                WHERE active.status IN ('preparing', 'starting', 'running', 'waiting')
+                  AND json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                  AND json_extract(child.payload_json, '$.lineage.parentThreadId') IS NOT NULL
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runtime_requests request
                 WHERE request.thread_id = t.thread_id AND request.status = 'pending'
