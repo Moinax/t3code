@@ -147,17 +147,16 @@ describe("isAutoSettlementCandidate", () => {
         NOW_MS,
       ),
     ).toBe(true);
-    // A pull request watch whose checks finished holds nothing, yet still keeps the thread.
-    expect(
-      ThreadSettlementService.isAutoSettlementCandidate(
-        shell({
-          pendingBackgroundTasks: [
-            { taskId: "pull-request-watch:github.com/acme/app#1", kind: "monitor" },
-          ],
-        }),
-        NOW_MS,
-      ),
-    ).toBe(false);
+    // A pull request watch whose checks finished holds nothing, yet still keeps the thread, and so
+    // does a monitor the agent did not mark awaited: settling would kill it before it wakes them.
+    for (const taskId of ["pull-request-watch:github.com/acme/app#1", "deploy-smoke"]) {
+      expect(
+        ThreadSettlementService.isAutoSettlementCandidate(
+          shell({ pendingBackgroundTasks: [{ taskId, kind: "monitor" }] }),
+          NOW_MS,
+        ),
+      ).toBe(false);
+    }
   });
 
   it("never settles, or keeps snoozed, a thread whose guest is waiting on the owner", () => {
