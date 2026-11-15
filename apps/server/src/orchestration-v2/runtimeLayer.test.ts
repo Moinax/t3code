@@ -30,6 +30,7 @@ import {
   type PullRequestCheck,
   type PullRequestDetail,
   type PullRequestComment,
+  type ThreadPullRequestWatch,
   PullRequestOperationError,
   type PullRequestWatchUntil,
   ProviderDriverKind,
@@ -5527,7 +5528,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         branch: null,
         worktreePath: null,
       });
-      const watch = (on: boolean, id: string) =>
+      const watch = (on: boolean, id: string, baseline?: ThreadPullRequestWatch) =>
         orchestrator.dispatch({
           type: "thread.pull-request.watch",
           commandId: CommandId.make(`pr-watch-told-${id}`),
@@ -5537,6 +5538,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           number: 12,
           watching: on,
           link: { url: "https://github.com/pingdotgg/t3code/pull/12", source: "agent" },
+          ...(baseline === undefined ? {} : { baseline }),
         });
       yield* watch(true, "start");
 
@@ -5612,6 +5614,29 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* worker.drain();
       assert.deepEqual(yield* summaries, ["#12: checks passed", "#12: checks passed"]);
       yield* watch(false, "end");
+
+      // The agent was shown these checks running, so their finishing is news, not baseline.
+      const shown = "2026-10-02T12:00:00.000Z";
+      yield* watch(true, "seeded", {
+        startedAt: shown,
+        headSha,
+        failedChecks: [],
+        passed: false,
+        passedChecks: [],
+        conflicting: false,
+        remarksThrough: shown,
+        remarkIds: [],
+        wakes: 0,
+        checksPending: true,
+      });
+      yield* restarted.sweep;
+      yield* worker.drain();
+      assert.deepEqual(yield* summaries, [
+        "#12: checks passed",
+        "#12: checks passed",
+        "#12: checks passed",
+      ]);
+      yield* watch(false, "seeded-end");
     }),
   );
 
